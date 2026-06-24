@@ -1,0 +1,1 @@
+"""EagleEye MCP server package."""

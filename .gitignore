@@ -1,0 +1,44 @@
+# Secrets and local config
+.env
+.env.example
+claude_desktop_config.example.json
+
+# Private-repo phase: code-only commits (see plan/modularization/PRIVATE-COMMIT-SCOPE.md)
+tests/
+plan/
+CLAUDE.md
+*.md
+!README.md
+
+# Local docs, scripts, and generated output (not product source)
+docs/
+support_doc/
+scripts/
+reviews/
+eagleeye-diagrams/
+.claude/
+Present/
+TIPS/
+results/
+
+# macOS junk
+.DS_Store
+**/.DS_Store
+
+# Python build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+venv/
+.venv/
+
+# Runtime data / local stores (not source)
+data/
+.worktrees/
+graphify-out/
+.superpowers/
+oneAI/

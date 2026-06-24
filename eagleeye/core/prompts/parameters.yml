@@ -1,0 +1,25 @@
+# EagleEye Prompts — Global Parameters
+# Used by all prompts via {{PARAM}} substitution
+# Edit these to tune severity thresholds, finding limits, verdict logic
+
+max_file_comments: 8
+max_findings_per_agent: 8
+
+# Severity definitions — used in all prompts
+severity_critical: "code that WILL break at runtime under normal usage — confirmed exceptions, data loss, or exploitable security vulnerability"
+severity_high: "bug that WILL occur under specific but realistic and common operating conditions — provide concrete failure scenario"
+severity_medium: "realistic code quality gap, missing error handling for edge cases that actually occur in production"
+severity_low: "only flag if it would actively mislead future developers, mask a real bug, or cause maintenance problems"
+
+# Cross-file analysis flags
+flag_type_mismatches: true
+flag_ci_cd_dependencies: true
+flag_config_runtime_mismatch: true
+
+# Verdict thresholds
+request_changes_min_severity: "critical"
+comment_min_severity: "high"
+
+# Risk level calculation
+critical_threshold: 2
+high_threshold: 1

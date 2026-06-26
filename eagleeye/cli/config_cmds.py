@@ -54,7 +54,7 @@ def config_show():
 
 @config_app.command(name="init")
 def config_init():
-    """Interactively write ~/.eagleeye/config.toml."""
+    """Interactively write ~/.eagleeye/config.yml."""
     console.print("[bold]EagleEye Configuration Setup[/bold]\n")
     github_token = typer.prompt("GitHub token (ghp_...)", hide_input=True)
     anthropic_key = typer.prompt("Anthropic API key (sk-ant-...)", hide_input=True)

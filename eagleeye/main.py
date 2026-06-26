@@ -7,6 +7,7 @@ from .cli.catalog import catalog_app
 from .cli.cockpit_cmd import cockpit
 from .cli.config_cmds import config_app, config_init, config_show, setup
 from .cli.context import context_app
+from .cli.doctor import doctor
 from .cli.history import history_app
 from .cli.lineage import ccms_app, edp_analyze, lineage_app
 from .cli.reference import reference_app
@@ -39,6 +40,7 @@ app.command(name="scan")(scan)
 app.command(name="list-prs")(list_prs)
 app.command(name="serve")(serve)
 app.command(name="setup")(setup)
+app.command(name="doctor")(doctor)
 app.command(name="edp")(edp_analyze)
 
 # config sub-commands also exposed at top level for backward compat

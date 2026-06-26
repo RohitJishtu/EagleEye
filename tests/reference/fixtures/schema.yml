@@ -1,0 +1,18 @@
+version: 2
+
+models:
+  - name: fct_account_health
+    description: "Account health rollup"
+    columns:
+      - name: account_id
+      - name: health_score
+
+  - name: dim_account
+    description: "Account dimension"
+
+sources:
+  - name: salesforce
+    schema: raw_salesforce
+    tables:
+      - name: account
+      - name: opportunity

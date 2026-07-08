@@ -3,8 +3,7 @@
 .env.example
 claude_desktop_config.example.json
 
-# Private-repo phase: code-only commits (see plan/modularization/PRIVATE-COMMIT-SCOPE.md)
-tests/
+# Private-repo phase: internal planning only (tests tracked for CI)
 plan/
 CLAUDE.md
 *.md

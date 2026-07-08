@@ -1,0 +1,41 @@
+diff --git a/snowflake_input_to_bronze.py b/snowflake_input_to_bronze.py
+index 0000000..1111111 100644
+--- a/snowflake_input_to_bronze.py
++++ b/snowflake_input_to_bronze.py
+@@ -1,5 +1,8 @@
+ from pyspark.sql import functions as F
+
+ def read_incremental(spark, config):
+     df = spark.read.format("snowflake").options(**config).load()
+-    return df
++    max_row_id = df.select(F.max("ROWID")).collect()[0][0]
++    return df.withColumn("MaxRowID", F.col("ROWID").cast("int"))
+
+diff --git a/instantiate_snowflake_tables.py b/instantiate_snowflake_tables.py
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/instantiate_snowflake_tables.py
+@@ -0,0 +1,11 @@
++def create_tables(conn, config):
++    archive_table = config["archive_table"]
++    error_table = config["error_table"]
++    create_archive_sql = f"CREATE TABLE IF NOT EXISTS {archive_table} (ROWID NUMBER(38,0), DATA VARIANT);"
++    create_error_sql   = f"CREATE TABLE IF NOT EXISTS {error_table}   (ROWID NUMBER(38,0), DATA VARIANT);"
++    conn.cursor().execute(create_archive_sql)
++    conn.cursor().execute(create_error_sql)
+
+diff --git a/cicd/create_snowflake_tables.yml b/cicd/create_snowflake_tables.yml
+new file mode 100644
+index 0000000..3333333
+--- /dev/null
++++ b/cicd/create_snowflake_tables.yml
+@@ -0,0 +1,10 @@
++name: create_snowflake_tables
++tasks:
++  - task_key: create_snowflake_tables
++    notebook_task:
++      notebook_path: /jobs/instantiate_snowflake_tables
++    email_notifications:
++      on_failure:
++        - oncall@example.com

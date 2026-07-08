@@ -128,6 +128,7 @@ Start the server: `eagleeye-mcp`
 
 | Command | Description |
 |---------|-------------|
+| `eagleeye doctor` | Check install, tokens, config, and writable paths |
 | `eagleeye review` | Full multi-agent PR review |
 | `eagleeye read` | Repo architecture summary |
 | `eagleeye scan` | Security / bug scan |

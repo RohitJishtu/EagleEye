@@ -1,0 +1,19 @@
+# CI/CD fixture: fail_on_run_failure: false on a prerequisite job
+# Downstream jobs write to tables this job creates — silent failure cascades
+
+name: create_snowflake_tables
+tasks:
+  - task_key: create_snowflake_tables
+    notebook_task:
+      notebook_path: /jobs/instantiate_snowflake_tables
+    # BUG: should be true — this is a prerequisite step
+    new_cluster:
+      spark_version: "13.3.x-scala2.12"
+    email_notifications:
+      # BUG: personal email instead of team destination_id
+      on_failure:
+        - oncall@example.com
+
+# downstream job depends on tables being created here
+depends_on:
+  - task_key: snowflake_to_bronze

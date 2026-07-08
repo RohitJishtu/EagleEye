@@ -178,8 +178,8 @@ def load_config() -> EagleEyeConfig:
 
     limits: dict = file_config.get("limits", {})
     max_files = _env_max_files or int(limits.get("max_files", 30))
-    max_file_bytes = _env_max_file_bytes or int(limits.get("max_file_bytes", 10_000))
-    max_total_bytes = _env_max_total_bytes or int(limits.get("max_total_bytes", 150_000))
+    max_file_bytes = _env_max_file_bytes or int(limits.get("max_file_bytes", 500_000))
+    max_total_bytes = _env_max_total_bytes or int(limits.get("max_total_bytes", 1_000_000))
 
     ref_cfg: dict = file_config.get("reference", {})
     env_repos = os.environ.get("EAGLEEYE_REFERENCE_REPOS", "")

@@ -1,0 +1,21 @@
+diff --git a/src/auth.py b/src/auth.py
+index 1234567..abcdefg 100644
+--- a/src/auth.py
++++ b/src/auth.py
+@@ -10,6 +10,10 @@ class AuthService:
+     def verify_token(self, token: str) -> bool:
+-        return self.db.query(f"SELECT * FROM tokens WHERE token = '{token}'")
++        stmt = self.db.prepare("SELECT * FROM tokens WHERE token = ?")
++        result = stmt.execute(token)
++        return result is not None
+
+diff --git a/src/utils.py b/src/utils.py
+index 2345678..bcdefgh 100644
+--- a/src/utils.py
++++ b/src/utils.py
+@@ -1,5 +1,8 @@
++import hashlib
++
+ def get_user_hash(user_id: int) -> str:
+-    return str(user_id)
++    return hashlib.sha256(str(user_id).encode()).hexdigest()

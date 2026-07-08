@@ -18,4 +18,4 @@ install:
 	$(PYTHON) -m pip install -e ".[dev]"
 
 cockpit:
-	eagleeye cockpit --serve --open
+	eagleeye cockpit --open

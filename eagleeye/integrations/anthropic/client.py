@@ -16,6 +16,7 @@ from eagleeye.core.models import (
     BugScanResult,
     DiagramResult,
     PRReviewResult,
+    RepoEvaluationResult,
     RepoSummaryResult,
 )
 from eagleeye.core.prompt_loader import get_prompt
@@ -53,6 +54,7 @@ class TokenUsage:
 
 _PR_REVIEW_SCHEMA = json.dumps(PRReviewResult.model_json_schema(), sort_keys=True)
 _REPO_SUMMARY_SCHEMA = json.dumps(RepoSummaryResult.model_json_schema(), sort_keys=True)
+_REPO_EVALUATION_SCHEMA = json.dumps(RepoEvaluationResult.model_json_schema(), sort_keys=True)
 _BUG_SCAN_SCHEMA = json.dumps(BugScanResult.model_json_schema(), sort_keys=True)
 _DIAGRAM_SCHEMA = json.dumps(DiagramResult.model_json_schema(), sort_keys=True)
 _AGENT_RESULT_SCHEMA = json.dumps(AgentResult.model_json_schema(), sort_keys=True)

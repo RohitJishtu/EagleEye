@@ -172,54 +172,27 @@ def run_repo_health_check(repo: str, branch: Optional[str] = None, path: Optiona
         branch: Branch to scan (defaults to default branch)
         path: Optional subdirectory to limit the scan (e.g. 'src/' or 'cicd/')
     """
-    from eagleeye.features.repo_auditor import run_audit
-
-    owner, repo_name = _parse_repo(repo)
-    github = _get_github_client()
+    from eagleeye.core.config import load_config
+    from eagleeye.workflows.repo_audit import run_repo_audit
 
     try:
-        repo_meta = github.get_repo_metadata(owner, repo_name)
-        effective_branch = branch or repo_meta.get("default_branch", "main")
-        tree = github.get_repo_tree(owner, repo_name, effective_branch)
+        config = load_config()
+        owner, repo_name = _parse_repo(repo)
+        result, effective_branch, file_paths, _coverage = run_repo_audit(
+            owner, repo_name, config, branch=branch, path=path,
+        )
     except Exception as e:
-        return f"Failed to fetch repo tree: {e}"
-    finally:
-        github.close()
+        return f"Failed to run repo health check: {e}"
 
-    # Filter to relevant file types, optionally scoped to a path
-    scannable = {".py", ".yml", ".yaml", ".sql", ".json"}
-    all_paths = [
-        item["path"] for item in tree
-        if item.get("type") == "blob"
-        and any(item["path"].endswith(ext) for ext in scannable)
-        and (not path or item["path"].startswith(path.rstrip("/")))
-    ][:60]  # cap at 60 files
-
-    # Fetch file contents
-    github = _get_github_client()
-    file_contents: dict[str, str] = {}
-    try:
-        for file_path in all_paths:
-            try:
-                content = github.get_file_content(owner, repo_name, file_path, ref=effective_branch)
-                file_contents[file_path] = content[:20_000]
-            except Exception:
-                pass
-    finally:
-        github.close()
-
-    if not file_contents:
+    if not file_paths:
         return f"No scannable files found in {repo} (path={path or 'root'})."
-
-    # Run audit
-    result = run_audit(file_contents, repo=repo)
 
     if not result.findings:
         return (
             f"## Repo Health Check: {repo}\n\n"
             f"**No issues found** across {result.files_checked} files scanned.\n\n"
-            f"Files scanned: {', '.join(list(file_contents.keys())[:10])}"
-            + (" ..." if len(file_contents) > 10 else "")
+            f"Files scanned: {', '.join(file_paths[:10])}"
+            + (" ..." if len(file_paths) > 10 else "")
         )
 
     # Format findings

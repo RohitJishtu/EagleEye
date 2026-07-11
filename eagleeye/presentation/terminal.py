@@ -20,7 +20,8 @@ from rich.text import Text
 
 from ..integrations.anthropic.client import TokenUsage
 from ..analysis.schema_impact import SchemaImpactResult
-from ..core.models import BugScanResult, DiagramResult, PRReviewResult, RepoSummaryResult
+from ..core.models import BugScanResult, DiagramResult, PRReviewResult, RepoEvaluationResult, RepoMap, RepoSummaryResult
+from ..features.repo_auditor import AuditResult
 
 console = Console()
 
@@ -362,6 +363,161 @@ def display_bug_scan(result: BugScanResult) -> None:
     else:
         console.print("[green]No findings.[/green]\n")
 
+
+def display_audit(
+    result: AuditResult,
+    branch: str = "",
+    files_scanned: Optional[list[str]] = None,
+) -> None:
+    """Render deterministic repo health check results."""
+    badge_parts = []
+    if result.critical_count:
+        badge_parts.append(f"[bold red]{result.critical_count} CRITICAL[/bold red]")
+    if result.high_count:
+        badge_parts.append(f"[red]{result.high_count} HIGH[/red]")
+    medium = sum(1 for f in result.findings if f.severity == "medium")
+    low = sum(1 for f in result.findings if f.severity == "low")
+    if medium:
+        badge_parts.append(f"[yellow]{medium} MEDIUM[/yellow]")
+    if low:
+        badge_parts.append(f"[cyan]{low} LOW[/cyan]")
+
+    badge = "  |  ".join(badge_parts) or "[green]No issues found[/green]"
+    title = f"[bold]Repo Audit: {result.repo}[/bold]"
+    if branch:
+        title += f" [dim]({branch})[/dim]"
+    border = "red" if result.critical_count else ("yellow" if result.findings else "green")
+    console.print(Panel(badge, title=title, border_style=border))
+    console.print(f"[dim]{result.summary()}[/dim]\n")
+
+    if result.findings:
+        table = Table(title="Findings", box=box.ROUNDED, show_lines=True, expand=True)
+        table.add_column("Sev", width=9)
+        table.add_column("File", style="cyan", max_width=35)
+        table.add_column("Category", width=14)
+        table.add_column("Checker", width=22)
+        table.add_column("Issue")
+        table.add_column("Fix", max_width=40)
+
+        for f in result.findings:
+            sev_style = _SEVERITY_STYLE.get(f.severity, "white")
+            loc = f.file + (f" (line {f.line})" if f.line else "")
+            table.add_row(
+                Text(f.severity.upper(), style=sev_style),
+                loc,
+                f.category,
+                f.checker,
+                f.title,
+                f.fix,
+            )
+        console.print(table)
+    else:
+        console.print("[green]No issues found.[/green]\n")
+
+    if files_scanned:
+        preview = ", ".join(files_scanned[:8])
+        if len(files_scanned) > 8:
+            preview += f" … (+{len(files_scanned) - 8} more)"
+        console.print(f"[dim]Files scanned ({len(files_scanned)}): {preview}[/dim]\n")
+
+
+def display_repo_map(result: RepoMap, saved_path: Optional[Path] = None) -> None:
+    """Render a built RepoMap summary."""
+    header = (
+        f"[bold]{result.owner}/{result.repo}[/bold]  "
+        f"[dim]branch {result.branch} · {result.file_count} files[/dim]"
+    )
+    console.print(Panel(header, title="[bold]Repo Map[/bold]", border_style="blue"))
+
+    if result.description:
+        console.print(Panel(result.description, title="Description", border_style="dim"))
+
+    if result.signals:
+        signal_text = "  ".join(f"[cyan]{k}[/cyan]" for k in sorted(result.signals))
+        console.print(Panel(signal_text, title="Detected signals", border_style="dim"))
+
+    if result.key_files:
+        files = "\n".join(f"  • {path}" for path in result.key_files)
+        console.print(Panel(files, title="Key files", border_style="dim"))
+
+    if result.readme_excerpt:
+        excerpt = result.readme_excerpt[:800]
+        if len(result.readme_excerpt) > 800:
+            excerpt += "\n…"
+        console.print(Panel(excerpt, title="README excerpt", border_style="dim"))
+
+    if result.file_tree_excerpt:
+        console.print(Panel(
+            result.file_tree_excerpt,
+            title="File tree (sample)",
+            border_style="dim",
+        ))
+
+    meta_parts = [f"Primary language: {result.primary_language or 'unknown'}"]
+    if result.reference_index_built:
+        meta_parts.append(f"Reference index: {result.reference_symbol_count:,} symbols")
+    if saved_path:
+        meta_parts.append(f"Saved → {saved_path}")
+    console.print(f"[dim]{' · '.join(meta_parts)}[/dim]\n")
+
+
+def display_repo_evaluation(result: RepoEvaluationResult, saved_path: Optional[Path] = None) -> None:
+    """Render a full repo evaluation report."""
+    r = result.ratings
+    risk_style = _RISK_STYLE.get(result.risk_level, "white")
+    badge = (
+        f"[{risk_style}]RISK: {result.risk_level.upper()}[/{risk_style}]  |  "
+        f"Overall: [bold]{r.overall_grade}[/bold]  |  "
+        f"Security: {r.security_grade}  |  "
+        f"Secrets: {r.secrets_status}  |  "
+        f"PII: {r.pii_status}"
+    )
+    title = f"[bold]Repo Evaluation: {result.repo}[/bold] [dim]({result.branch})[/dim]"
+    console.print(Panel(badge, title=title, border_style="red" if result.risk_level in ("critical", "high") else "blue"))
+
+    if result.executive_summary:
+        console.print(Panel(result.executive_summary, title="Executive summary", border_style="blue"))
+    if result.what_it_is:
+        console.print(Panel(result.what_it_is, title="What this repo is", border_style="dim"))
+    if result.problem_solved:
+        console.print(Panel(result.problem_solved, title="Problem solved", border_style="dim"))
+    if result.how_it_works:
+        console.print(Panel(result.how_it_works, title="How it works", border_style="dim"))
+
+    if result.critical_vulnerabilities:
+        vuln_lines = "\n".join(
+            f"[red]•[/red] [{f.severity.upper()}] {f.title} — `{f.file}`"
+            for f in result.critical_vulnerabilities[:10]
+        )
+        console.print(Panel(vuln_lines, title="Critical vulnerabilities", border_style="red"))
+
+    if result.secrets_and_pii_risks:
+        sec_lines = "\n".join(
+            f"[yellow]•[/yellow] [{f.severity.upper()}] {f.title} — `{f.file}`"
+            for f in result.secrets_and_pii_risks[:10]
+        )
+        console.print(Panel(sec_lines, title="Secrets & PII", border_style="yellow"))
+
+    if result.future_scope_stated:
+        console.print(Panel(result.future_scope_stated, title="Future scope (stated)", border_style="dim"))
+    if result.future_scope_inferred:
+        console.print(Panel(result.future_scope_inferred, title="Future scope (inferred)", border_style="dim"))
+
+    if result.recommendations:
+        recs = "\n".join(f"• {rec}" for rec in result.recommendations[:8])
+        console.print(Panel(recs, title="Recommendations", border_style="green"))
+
+    if result.synthesis_failed:
+        console.print("[yellow]Note: LLM synthesis skipped or failed — deterministic findings shown.[/yellow]")
+
+    cov = result.coverage
+    if cov:
+        console.print(
+            f"[dim]Coverage: {cov.get('audit_scanned', '?')}/{cov.get('audit_eligible', '?')} files audited"
+            f" · {cov.get('tree_files', '?')} tree files[/dim]"
+        )
+    if saved_path:
+        console.print(f"[dim]Saved → {saved_path}[/dim]\n")
 
 
 def display_diagram(result: DiagramResult, saved_path: Optional[Path] = None) -> None:

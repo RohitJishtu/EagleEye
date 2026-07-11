@@ -1,14 +1,16 @@
-"""EagleEye Cockpit — generate reviews/index.html from all saved review files."""
+"""EagleEye Cockpit — generate reviews/index.html from saved PR reviews and repo evaluations."""
 
 from __future__ import annotations
 
 import re
 from datetime import datetime
 from pathlib import Path
+import os
 
-from ...core.paths import reviews_root
+from ...core.paths import evaluations_root, reviews_root
 
 REVIEWS_DIR = reviews_root()
+EVALUATIONS_DIR = evaluations_root()
 
 _VERDICT_META = {
     "approve":          {"label": "Approved ✅",        "cls": "approve",  "emoji": "✅"},
@@ -181,6 +183,120 @@ def _group_reviews(rows: list[dict]) -> list[dict]:
     return result
 
 
+def _extract_eval_summary(text: str) -> str:
+    m = re.search(r"## Executive summary\n\n(.+?)(?:\n\n##|\Z)", text, re.DOTALL)
+    if m:
+        return m.group(1).strip().replace("\n", " ")[:220]
+    m = re.search(r"## What this repo is\n\n(.+?)(?:\n\n##|\Z)", text, re.DOTALL)
+    if m:
+        return m.group(1).strip().replace("\n", " ")[:220]
+    return "Repo evaluation"
+
+
+def _scan_evaluations() -> list[dict]:
+    rows = []
+    root = evaluations_root()
+    if not root.exists():
+        return rows
+    for md in root.rglob("eval-*.md"):
+        text = md.read_text(encoding="utf-8")
+        fm = _parse_fm(text)
+        if not fm.get("repo"):
+            continue
+        html_path = md.with_suffix(".html")
+        if not html_path.exists():
+            try:
+                from .eval_report import process as _generate_eval_html
+                _generate_eval_html(md)
+            except Exception:
+                pass
+        ts = _resolve_timestamp(fm, md.stat().st_mtime)
+        risk = (fm.get("risk_level") or "unknown").upper()
+        md_rel = Path(os.path.relpath(md.resolve(), reviews_root().resolve())).as_posix()
+        html_rel = (
+            Path(os.path.relpath(html_path.resolve(), reviews_root().resolve())).as_posix()
+            if html_path.exists() else ""
+        )
+        repo_slug = fm.get("repo", "")
+        rows.append({
+            "repo": repo_slug,
+            "branch": fm.get("branch", "main"),
+            "date": fm.get("date", ""),
+            "timestamp": ts,
+            "risk": risk,
+            "html": html_rel,
+            "md": md_rel,
+            "summary": _extract_eval_summary(text),
+            "synthesis_failed": fm.get("synthesis_failed", "False").lower() == "true",
+            "scoped_path": fm.get("scoped_path", ""),
+        })
+    rows.sort(key=lambda r: r["timestamp"], reverse=True)
+    return rows
+
+
+def _group_evaluations(rows: list[dict]) -> list[dict]:
+    from collections import defaultdict
+
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        groups[row["repo"]].append(row)
+
+    result = []
+    for runs in groups.values():
+        primary = dict(runs[0])
+        primary["history"] = runs[:3]
+        result.append(primary)
+    result.sort(key=lambda r: r["timestamp"], reverse=True)
+    return result
+
+
+def _eval_card(r: dict) -> str:
+    rm = _RISK_META.get(r["risk"], _RISK_META["UNKNOWN"])
+    repo_url = f"https://github.com/{r['repo']}"
+    ts = int(r["timestamp"])
+    scope_tag = (
+        f'<span class="files-badge">📁 {r["scoped_path"]}</span>'
+        if r.get("scoped_path") else ""
+    )
+    llm_tag = (
+        '<span class="files-badge">⚡ no LLM</span>'
+        if r.get("synthesis_failed") else ""
+    )
+    history_html = ""
+    history = r.get("history", [])
+    if len(history) > 1:
+        prev_links = ""
+        for run in history[1:]:
+            href = run["html"] if run.get("html") else run["md"]
+            prev_links += f'<a href="{href}" target="_blank" class="run-link">{run["date"] or "prev"} ↗</a>'
+        history_html = f'<div class="run-history"><span class="run-history-label">Prev runs:</span>{prev_links}</div>'
+
+    report_href = r["html"] if r.get("html") else r["md"]
+
+    return f"""
+<div class="pr-card eval-card risk-{rm['cls']}" style="border-left-color:{rm['color']}" data-ts="{ts}" data-risk="{r['risk'].lower()}" data-type="evaluation">
+  <div class="card-top">
+    <div class="card-badges">
+      <span class="verdict-badge v-unknown">📋 Evaluation</span>
+      <span class="risk-badge" style="background:{rm['color']}20;color:{rm['color']};border-color:{rm['color']}40">{r['risk']} RISK</span>
+    </div>
+    <span class="time-ago" data-ts="{ts}" title="{r['date']}">…</span>
+  </div>
+  <div class="card-title">{r['summary']}</div>
+  <div class="card-meta">
+    <a href="{repo_url}" target="_blank" class="repo-link">{r['repo']}</a>
+    <span class="files-badge">🌿 {r['branch']}</span>
+    {scope_tag}
+    {llm_tag}
+  </div>
+  <div class="card-footer">
+    <span class="reviewed-at">🕐 {r['date']}</span>
+    <a href="{report_href}" target="_blank" class="open-btn">Open Report ↗</a>
+  </div>
+  {history_html}
+</div>"""
+
+
 def _stat_card(label: str, value: str, accent: str = "#b3ff47", stat_id: str = "") -> str:
     id_attr = f' id="{stat_id}"' if stat_id else ""
     return (
@@ -252,8 +368,10 @@ def _pr_card(r: dict) -> str:
 
 
 def build_dashboard() -> Path:
-    rows = _scan_reviews()          # flat — one per .md file
-    grouped = _group_reviews(rows)  # one per unique PR
+    rows = _scan_reviews()
+    grouped = _group_reviews(rows)
+    eval_rows = _scan_evaluations()
+    eval_grouped = _group_evaluations(eval_rows)
     now_str = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
 
     total      = len(grouped)
@@ -261,10 +379,13 @@ def build_dashboard() -> Path:
     blocked    = sum(1 for r in grouped if r["verdict"] == "request_changes")
     comment    = sum(1 for r in grouped if r["verdict"] == "comment")
     critical   = sum(1 for r in grouped if r["risk"] in ("CRITICAL", "HIGH"))
-    total_cost = sum(r["cost_usd"] for r in grouped)  # latest run per PR — matches JS updateStats()
+    total_cost = sum(r["cost_usd"] for r in grouped)
+
+    eval_total = len(eval_grouped)
+    eval_critical = sum(1 for r in eval_grouped if r["risk"] in ("CRITICAL", "HIGH"))
 
     cost_display = f"${total_cost:.2f}" if total_cost > 0 else "—"
-    stats_html = "".join([
+    review_stats_html = "".join([
         _stat_card("Total Reviews",   str(total),    "#b3ff47", "stat-total"),
         _stat_card("Approved",        str(approved), "#44cc88", "stat-approved"),
         _stat_card("Needs Changes",   str(blocked),  "#ff4444", "stat-blocked"),
@@ -272,10 +393,23 @@ def build_dashboard() -> Path:
         _stat_card("High/Critical",   str(critical), "#ff8800", "stat-critical"),
         _stat_card("Total Cost",      cost_display,  "#b3ff47", "stat-cost"),
     ])
+    eval_stats_html = "".join([
+        _stat_card("Total Evaluations", str(eval_total), "#b3ff47", "estat-total"),
+        _stat_card("High/Critical",     str(eval_critical), "#ff8800", "estat-critical"),
+        _stat_card("Repos Assessed",    str(eval_total), "#44cc88", "estat-repos"),
+    ])
 
     cards_html = "".join(_pr_card(r) for r in grouped)
     if not cards_html:
-        cards_html = '<div class="empty">No reviews found in <code>reviews/</code> — run <code>eagleeye review</code> first.</div>'
+        cards_html = '<div class="empty">No PR reviews found — run <code>eagleeye review owner/repo 42</code>.</div>'
+
+    eval_cards_html = "".join(_eval_card(r) for r in eval_grouped)
+    if not eval_cards_html:
+        eval_cards_html = '<div class="empty">No evaluations found — run <code>eagleeye evaluate owner/repo</code>.</div>'
+
+    record_count = f"{total} review{'' if total == 1 else 's'}"
+    if eval_total:
+        record_count += f" · {eval_total} evaluation{'' if eval_total == 1 else 's'}"
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -354,6 +488,11 @@ def build_dashboard() -> Path:
   .search-input:focus {{ border-color: var(--accent); width: 300px; }}
   .search-input::placeholder {{ color: var(--muted); }}
   .pr-card.hidden {{ display: none; }}
+  .tab-bar {{ display: flex; gap: 8px; padding: 12px 32px 0; border-bottom: 1px solid var(--border); background: var(--panel); }}
+  .tab-btn {{ background: transparent; border: none; border-bottom: 2px solid transparent; color: var(--muted); padding: 10px 16px; font-size: 13px; font-weight: 600; cursor: pointer; }}
+  .tab-btn.active {{ color: var(--accent); border-bottom-color: var(--accent); }}
+  .tab-panel {{ display: none; }}
+  .tab-panel.active {{ display: block; }}
 </style>
 </head>
 <body>
@@ -363,24 +502,30 @@ def build_dashboard() -> Path:
     <div class="logo-eye">🦅</div>
     <div>
       <div class="logo-text">EagleEye</div>
-      <div class="logo-sub">PR Review Cockpit</div>
+      <div class="logo-sub">Command Center</div>
     </div>
   </div>
   <div style="display:flex;align-items:center;gap:20px">
     <input class="search-input" type="text" placeholder="Search repo or title…" oninput="doSearch(this.value)" />
     <div class="header-right">
       <div>Last refreshed: <strong>{now_str}</strong></div>
-      <div style="margin-top:3px">{total} review{'' if total == 1 else 's'} on record</div>
+      <div style="margin-top:3px">{record_count} on record</div>
     </div>
   </div>
 </div>
 
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="switchTab('reviews', this)">PR Reviews ({total})</button>
+  <button class="tab-btn" onclick="switchTab('evaluations', this)">Repo Evaluations ({eval_total})</button>
+</div>
+
+<div id="panel-reviews" class="tab-panel active">
 <div class="stats-strip">
-  {stats_html}
+  {review_stats_html}
 </div>
 
 <div class="toolbar">
-  <div class="toolbar-title">Sorted by most recently reviewed</div>
+  <div class="toolbar-title">PR reviews — sorted by most recent</div>
   <button class="filter-btn active" onclick="setFilter('verdict','all',this)">All</button>
   <button class="filter-btn" onclick="setFilter('verdict','approve',this)">✅ Approved</button>
   <button class="filter-btn" onclick="setFilter('verdict','block',this)">❌ Needs Changes</button>
@@ -397,9 +542,51 @@ def build_dashboard() -> Path:
   <button class="filter-btn" onclick="setFilter('date','month',this)">This Month</button>
 </div>
 
-<div class="grid" id="grid">
+<div class="grid" id="grid-reviews">
   {cards_html}
 </div>
+</div>
+
+<div id="panel-evaluations" class="tab-panel">
+<div class="stats-strip">
+  {eval_stats_html}
+</div>
+
+<div class="toolbar">
+  <div class="toolbar-title">Repo evaluations — sorted by most recent</div>
+  <button class="filter-btn" onclick="setEvalFilter('risk','critical',this)">🔴 Critical</button>
+  <button class="filter-btn" onclick="setEvalFilter('risk','high',this)">🟠 High</button>
+  <button class="filter-btn" onclick="setEvalFilter('risk','all',this)">All</button>
+</div>
+
+<div class="grid" id="grid-evaluations">
+  {eval_cards_html}
+</div>
+</div>
+
+<script>
+function switchTab(name, btn) {{
+  document.querySelectorAll('.tab-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+  btn.classList.add('active');
+  document.querySelectorAll('.tab-panel').forEach(function(p) {{ p.classList.remove('active'); }});
+  document.getElementById('panel-' + name).classList.add('active');
+}}
+
+var _evalRisk = 'all';
+function setEvalFilter(type, val, btn) {{
+  document.querySelectorAll('#panel-evaluations .filter-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+  btn.classList.add('active');
+  _evalRisk = val;
+  applyEvalFilters();
+}}
+function applyEvalFilters() {{
+  document.querySelectorAll('#grid-evaluations .eval-card').forEach(function(card) {{
+    if (_evalRisk === 'all') {{ card.classList.remove('hidden'); return; }}
+    if ((card.dataset.risk || '') === _evalRisk) card.classList.remove('hidden');
+    else card.classList.add('hidden');
+  }});
+}}
+</script>
 
 <script>
 // ── Live relative time (updates every minute) ──────────────────────────────
@@ -447,7 +634,7 @@ function updateStats() {{
 
 function applyFilters() {{
   var now = Math.floor(Date.now() / 1000);
-  document.querySelectorAll('.pr-card').forEach(function(card) {{
+  document.querySelectorAll('#grid-reviews .pr-card').forEach(function(card) {{
     var text = card.textContent.toLowerCase();
 
     if (_searchQ && !text.includes(_searchQ)) {{ card.classList.add('hidden'); return; }}
@@ -499,6 +686,11 @@ function setFilter(type, val, btn) {{
 function doSearch(q) {{
   _searchQ = q.toLowerCase();
   applyFilters();
+  document.querySelectorAll('#grid-evaluations .eval-card').forEach(function(card) {{
+    var text = card.textContent.toLowerCase();
+    if (_searchQ && !text.includes(_searchQ)) card.classList.add('hidden');
+    else if (_evalRisk === 'all' || (card.dataset.risk || '') === _evalRisk) card.classList.remove('hidden');
+  }});
 }}
 </script>
 

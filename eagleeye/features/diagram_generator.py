@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from ..integrations.anthropic.client import AIClient, TokenUsage
+from pydantic import ValidationError
+
 from ..core.config import EagleEyeConfig
 from ..core.models import DiagramResult, PRReviewResult, RepoSummaryResult
+from ..core.prompt_loader import get_prompt
+from ..integrations.anthropic.client import AIClient, _clean_json
+
+_DIAGRAM_SCHEMA = json.dumps(DiagramResult.model_json_schema(), sort_keys=True)
 
 
 def _make_ai_client(config: EagleEyeConfig) -> AIClient:
@@ -29,7 +35,39 @@ def generate_architecture_diagram(
     config: EagleEyeConfig,
 ) -> DiagramResult:
     """Generate a Mermaid architecture diagram from a repo summary."""
-    return _make_ai_client(config).generate_architecture_diagram(summary, repo_name)
+    client = _make_ai_client(config)
+    summary_text = (
+        f"Repository: {repo_name}\n"
+        f"Purpose: {summary.purpose}\n"
+        f"Tech Stack: {', '.join(summary.tech_stack)}\n\n"
+        f"Architecture Layers:\n"
+        + "\n".join(
+            f"  - {layer.name}: {layer.description} (files: {', '.join(layer.key_files[:5])})"
+            for layer in summary.architecture_layers
+        )
+        + f"\n\nEntry Points: {', '.join(summary.entry_points)}"
+        + f"\nExternal Dependencies: {', '.join(summary.external_dependencies)}"
+    )
+
+    user_content = [
+        client._make_content_block(
+            "Generate a Mermaid architecture diagram for this repository.\n\n"
+            f"{summary_text}\n\n"
+            "Create a flowchart TD showing the major components, their relationships, "
+            "and data flow.\n"
+            "Use subgraphs for logical layers. Annotate edges with relationship types.\n"
+            "Keep it readable: max 20 nodes.\n\n"
+            f"Respond with valid JSON exactly matching this schema:\n{_DIAGRAM_SCHEMA}"
+        )
+    ]
+
+    raw = client._call(get_prompt("utils.diagram"), user_content, max_tokens=4096)
+    try:
+        return DiagramResult.model_validate_json(_clean_json(raw))
+    except (ValueError, ValidationError) as exc:
+        raise RuntimeError(
+            f"Claude returned an unexpected response: {raw[:200]!r}"
+        ) from exc
 
 
 def generate_change_impact_diagram(
@@ -40,7 +78,46 @@ def generate_change_impact_diagram(
     config: EagleEyeConfig,
 ) -> DiagramResult:
     """Generate a Mermaid change-impact diagram from a PR review."""
-    return _make_ai_client(config).generate_change_impact_diagram(review, diff, repo_name, pr_title)
+    client = _make_ai_client(config)
+    changed_files = [
+        line[6:]
+        for line in diff.splitlines()
+        if line.startswith("--- a/") and not line.startswith("--- a/dev/null")
+    ][:20]
+
+    review_text = (
+        f"Repository: {repo_name}\n"
+        f"PR: {pr_title}\n"
+        f"Risk Level: {review.risk_level}\n"
+        f"Verdict: {review.overall_verdict}\n\n"
+        f"Files Changed: {', '.join(changed_files)}\n\n"
+        f"Summary: {review.summary}\n\n"
+        f"Blocking Issues: {'; '.join(review.blocking_issues) or 'none'}\n\n"
+        f"File Comments:\n"
+        + "\n".join(
+            f"  [{c.severity.upper()}] {c.file}: {c.comment}"
+            for c in review.file_comments[:15]
+        )
+    )
+
+    user_content = [
+        client._make_content_block(
+            f"Generate a Mermaid change-impact diagram for this pull request.\n\n{review_text}\n\n"
+            f"Create a flowchart LR showing: which files changed → what they interact with → "
+            f"downstream affected components.\n"
+            f"Highlight changed nodes with style fill:#f90,color:#000.\n"
+            f"Mark high/critical issues in red (style fill:#d00,color:#fff).\n\n"
+            f"Respond with valid JSON exactly matching this schema:\n{_DIAGRAM_SCHEMA}"
+        )
+    ]
+
+    raw = client._call(get_prompt("utils.diagram"), user_content, max_tokens=4096)
+    try:
+        return DiagramResult.model_validate_json(_clean_json(raw))
+    except (ValueError, ValidationError) as exc:
+        raise RuntimeError(
+            f"Claude returned an unexpected response: {raw[:200]!r}"
+        ) from exc
 
 
 def save_diagram(result: DiagramResult, output_dir: Path, filename: str) -> Path:

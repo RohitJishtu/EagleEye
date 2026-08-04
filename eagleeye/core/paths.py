@@ -22,3 +22,16 @@ def reviews_root() -> Path:
 def reviews_dir(owner: str, repo: str) -> Path:
     """Return the reviews directory for a specific repository."""
     return reviews_root() / f"{owner}-{repo}"
+
+
+_DEFAULT_EVALUATIONS_ROOT = _PACKAGE_ROOT / "evaluations"
+
+
+def evaluations_root() -> Path:
+    """Return the root directory for saved repo evaluations."""
+    return Path(os.environ.get("EAGLEEYE_EVALUATIONS_DIR", _DEFAULT_EVALUATIONS_ROOT))
+
+
+def evaluations_dir(owner: str, repo: str) -> Path:
+    """Return the evaluations directory for a specific repository."""
+    return evaluations_root() / f"{owner}-{repo}"

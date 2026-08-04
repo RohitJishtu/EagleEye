@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import typer
 
+from .cli.evaluate import evaluate
+from .cli.audit import audit
 from .cli.catalog import catalog_app
 from .cli.cockpit_cmd import cockpit
 from .cli.config_cmds import config_app, config_init, config_show, setup
@@ -13,6 +15,7 @@ from .cli.lineage import ccms_app, edp_analyze, lineage_app
 from .cli.reference import reference_app
 from .cli.review import list_prs, read, read_all, review, scan, serve
 from .cli.schedule import schedule_app
+from .cli.understand import understand_app
 
 app = typer.Typer(
     name="eagleeye",
@@ -31,12 +34,15 @@ app.add_typer(catalog_app,   name="catalog")
 app.add_typer(reference_app, name="reference")
 app.add_typer(history_app,   name="history")
 app.add_typer(schedule_app,  name="schedule")
+app.add_typer(understand_app, name="understand")
 
 # ── Top-level commands ────────────────────────────────────────────────────────
 app.command(name="review")(review)
 app.command(name="read")(read)
 app.command(name="read-all")(read_all)
 app.command(name="scan")(scan)
+app.command(name="audit")(audit)
+app.command(name="evaluate")(evaluate)
 app.command(name="list-prs")(list_prs)
 app.command(name="serve")(serve)
 app.command(name="setup")(setup)

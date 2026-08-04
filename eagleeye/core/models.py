@@ -72,6 +72,99 @@ class RepoSummaryResult(BaseModel):
     open_questions: list[str] = Field(default_factory=list)
 
 
+class RepoMap(BaseModel):
+    """Lightweight deterministic repo profile — built without a full LLM read."""
+
+    owner: str
+    repo: str
+    branch: str
+    built_at: str
+    html_url: str = ""
+    description: str = ""
+    primary_language: str = ""
+    topics: list[str] = Field(default_factory=list)
+    file_count: int = 0
+    top_level_dirs: list[str] = Field(default_factory=list)
+    languages: dict[str, int] = Field(default_factory=dict)
+    key_files: list[str] = Field(default_factory=list)
+    readme_excerpt: str = ""
+    file_tree_excerpt: str = ""
+    signals: list[str] = Field(default_factory=list)
+    reference_index_built: bool = False
+    reference_symbol_count: int = 0
+
+
+class EvalFinding(BaseModel):
+    file: str
+    line: Optional[int] = None
+    severity: Literal["critical", "high", "medium", "low"]
+    category: str
+    title: str
+    description: str
+    fix: str
+    source: Literal["deterministic", "llm"] = "deterministic"
+    cwe_id: Optional[str] = None
+
+
+class RepoRatings(BaseModel):
+    overall_grade: str = "B"
+    security_grade: str = "B"
+    secrets_status: Literal["pass", "warn", "fail"] = "pass"
+    pii_status: Literal["pass", "warn", "fail"] = "pass"
+    documentation_score: int = 3
+    testability_score: int = 3
+    maintainability_score: int = 3
+    rating_notes: list[str] = Field(default_factory=list)
+
+
+class ModuleReadResult(BaseModel):
+    """Deep-read summary for one repo module (directory / package)."""
+
+    module: str
+    purpose: str = ""
+    entry_points: list[str] = Field(default_factory=list)
+    key_abstractions: list[str] = Field(default_factory=list)
+    data_flow: str = ""
+    data_stores: list[str] = Field(default_factory=list)
+    integrations: list[str] = Field(default_factory=list)
+    security_notes: list[str] = Field(default_factory=list)
+    gotchas: list[str] = Field(default_factory=list)
+    files_read: list[str] = Field(default_factory=list)
+
+
+class RemediationStep(BaseModel):
+    """Concrete code-change plan for one shortcoming."""
+
+    priority: int = 1
+    severity: Literal["critical", "high", "medium", "low"] = "medium"
+    title: str
+    files: list[str] = Field(default_factory=list)
+    problem: str = ""
+    change_plan: str = ""
+    acceptance_check: str = ""
+
+
+class RepoEvaluationResult(BaseModel):
+    repo: str
+    branch: str
+    scoped_path: Optional[str] = None
+    executive_summary: str = ""
+    what_it_is: str = ""
+    problem_solved: str = ""
+    how_it_works: str = ""
+    critical_vulnerabilities: list[EvalFinding] = Field(default_factory=list)
+    secrets_and_pii_risks: list[EvalFinding] = Field(default_factory=list)
+    future_scope_stated: str = ""
+    future_scope_inferred: str = ""
+    recommendations: list[str] = Field(default_factory=list)
+    remediation_plan: list[RemediationStep] = Field(default_factory=list)
+    risk_level: Literal["low", "medium", "high", "critical"] = "low"
+    ratings: RepoRatings = Field(default_factory=RepoRatings)
+    confidence_notes: list[str] = Field(default_factory=list)
+    coverage: dict[str, Any] = Field(default_factory=dict)
+    synthesis_failed: bool = False
+    module_reads: list[ModuleReadResult] = Field(default_factory=list)
+
 
 class BugFinding(BaseModel):
     file: str

@@ -131,6 +131,9 @@ Start the server: `eagleeye-mcp`
 | `eagleeye doctor` | Check install, tokens, config, and writable paths |
 | `eagleeye review` | Full multi-agent PR review |
 | `eagleeye read` | Repo architecture summary |
+| `eagleeye audit` | Deterministic repo health checks (secrets, SQL injection, CI) |
+| `eagleeye evaluate` | One-command repo evaluation — multi-module deep-read, security, saved report (`--quick` for single-pass, `--no-llm` for audit-only) |
+| `eagleeye understand build` | Lightweight repo map (tree, README, signals) |
 | `eagleeye scan` | Security / bug scan |
 | `eagleeye list-prs` | List open PRs |
 | `eagleeye cockpit` | Build/open review dashboard |

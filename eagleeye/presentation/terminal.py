@@ -461,63 +461,170 @@ def display_repo_map(result: RepoMap, saved_path: Optional[Path] = None) -> None
     console.print(f"[dim]{' · '.join(meta_parts)}[/dim]\n")
 
 
-def display_repo_evaluation(result: RepoEvaluationResult, saved_path: Optional[Path] = None) -> None:
-    """Render a full repo evaluation report."""
-    r = result.ratings
-    risk_style = _RISK_STYLE.get(result.risk_level, "white")
-    badge = (
-        f"[{risk_style}]RISK: {result.risk_level.upper()}[/{risk_style}]  |  "
-        f"Overall: [bold]{r.overall_grade}[/bold]  |  "
-        f"Security: {r.security_grade}  |  "
-        f"Secrets: {r.secrets_status}  |  "
-        f"PII: {r.pii_status}"
-    )
-    title = f"[bold]Repo Evaluation: {result.repo}[/bold] [dim]({result.branch})[/dim]"
-    console.print(Panel(badge, title=title, border_style="red" if result.risk_level in ("critical", "high") else "blue"))
+def _first_sentence(text: str, max_len: int = 140) -> str:
+    text = (text or "").strip().replace("\n", " ")
+    if not text:
+        return ""
+    for sep in (". ", "! ", "? "):
+        if sep in text:
+            text = text.split(sep, 1)[0] + sep.strip()
+            break
+    if len(text) > max_len:
+        return text[: max_len - 1].rstrip() + "…"
+    return text
 
-    if result.executive_summary:
-        console.print(Panel(result.executive_summary, title="Executive summary", border_style="blue"))
+
+def _short_finding_title(title: str, max_len: int = 56) -> str:
+    title = (title or "").strip()
+    if len(title) <= max_len:
+        return title
+    return title[: max_len - 1].rstrip() + "…"
+
+
+def display_repo_evaluation(result: RepoEvaluationResult, saved_path: Optional[Path] = None) -> None:
+    """Render a compact radar-style repo evaluation scoreboard."""
+    r = result.ratings
+    risk = result.risk_level
+    risk_style = _RISK_STYLE.get(risk, "white")
+    border = "red" if risk in ("critical", "high") else ("yellow" if risk == "medium" else "green")
+    n_crit = len(result.critical_vulnerabilities)
+    n_sec = len(result.secrets_and_pii_risks)
+    n_mods = len(result.module_reads)
+
+    board = Table.grid(padding=(0, 2))
+    board.add_column(justify="left")
+    board.add_column(justify="left")
+    board.add_row(
+        Text(risk.upper(), style=risk_style),
+        Text.from_markup(
+            f"Overall [bold]{r.overall_grade}[/bold]  ·  "
+            f"Security {r.security_grade}  ·  "
+            f"Secrets {r.secrets_status}  ·  "
+            f"PII {r.pii_status}"
+        ),
+    )
+    board.add_row(
+        "",
+        Text(
+            f"{n_crit} critical  ·  {n_sec} secrets/PII  ·  {n_mods} modules deep-read",
+            style="dim",
+        ),
+    )
+    so_what = _first_sentence(result.executive_summary)
+    if so_what:
+        board.add_row("", Text(so_what, style="italic"))
+
+    console.print(
+        Panel(
+            board,
+            title=f"[bold]EagleEye[/bold] · {result.repo} [dim]({result.branch})[/dim]",
+            border_style=border,
+            box=box.HEAVY,
+            padding=(1, 2),
+        )
+    )
+
+    # Compact WHAT / WHY / FLOW strip
+    strip = Table.grid(padding=(0, 1))
+    strip.add_column(style="bold cyan", width=6)
+    strip.add_column()
+    has_strip = False
     if result.what_it_is:
-        console.print(Panel(result.what_it_is, title="What this repo is", border_style="dim"))
+        strip.add_row("WHAT", _first_sentence(result.what_it_is, 110))
+        has_strip = True
     if result.problem_solved:
-        console.print(Panel(result.problem_solved, title="Problem solved", border_style="dim"))
+        strip.add_row("WHY", _first_sentence(result.problem_solved, 110))
+        has_strip = True
     if result.how_it_works:
-        console.print(Panel(result.how_it_works, title="How it works", border_style="dim"))
+        flow = result.how_it_works.strip().replace("\n", " ")
+        strip.add_row("FLOW", flow[:160] + ("…" if len(flow) > 160 else ""))
+        has_strip = True
+    if has_strip:
+        console.print(Panel(strip, border_style="dim", box=box.SIMPLE, padding=(0, 1)))
+
+    if result.module_reads:
+        mod_line = Text()
+        mod_line.append("MODULES  ", style="bold")
+        for i, m in enumerate(result.module_reads[:6]):
+            if i:
+                mod_line.append("  ")
+            mod_line.append(m.module, style="cyan")
+            if m.purpose:
+                mod_line.append(f"·{_first_sentence(m.purpose, 36)}", style="dim")
+        console.print(mod_line)
+        console.print()
 
     if result.critical_vulnerabilities:
-        vuln_lines = "\n".join(
-            f"[red]•[/red] [{f.severity.upper()}] {f.title} — `{f.file}`"
-            for f in result.critical_vulnerabilities[:10]
-        )
-        console.print(Panel(vuln_lines, title="Critical vulnerabilities", border_style="red"))
+        console.print(Text("⚠  CRITICAL HITS", style="bold red"))
+        for f in result.critical_vulnerabilities[:8]:
+            loc = f"`{f.file}`" + (f":{f.line}" if f.line else "")
+            console.print(
+                f"  [red]◆[/red] [{f.severity.upper()}] "
+                f"{_short_finding_title(f.title)}  [dim]{loc}[/dim]"
+            )
+        console.print()
 
     if result.secrets_and_pii_risks:
-        sec_lines = "\n".join(
-            f"[yellow]•[/yellow] [{f.severity.upper()}] {f.title} — `{f.file}`"
-            for f in result.secrets_and_pii_risks[:10]
-        )
-        console.print(Panel(sec_lines, title="Secrets & PII", border_style="yellow"))
-
-    if result.future_scope_stated:
-        console.print(Panel(result.future_scope_stated, title="Future scope (stated)", border_style="dim"))
-    if result.future_scope_inferred:
-        console.print(Panel(result.future_scope_inferred, title="Future scope (inferred)", border_style="dim"))
+        console.print(Text("◇  SECRETS / PII", style="bold yellow"))
+        for f in result.secrets_and_pii_risks[:8]:
+            loc = f"`{f.file}`" if f.file else ""
+            console.print(
+                f"  [yellow]·[/yellow] [{f.severity.upper()}] "
+                f"{_short_finding_title(f.title)}  [dim]{loc}[/dim]"
+            )
+        console.print()
 
     if result.recommendations:
-        recs = "\n".join(f"• {rec}" for rec in result.recommendations[:8])
-        console.print(Panel(recs, title="Recommendations", border_style="green"))
+        console.print(Text("NEXT", style="bold green"))
+        shown = result.recommendations[:3]
+        for i, rec in enumerate(shown, 1):
+            console.print(f"  {i}. {_first_sentence(rec, 100)}")
+        extra = len(result.recommendations) - len(shown)
+        if extra > 0:
+            console.print(f"  [dim]… +{extra} more → open HTML report[/dim]")
+        console.print()
+
+    if result.remediation_plan:
+        console.print(Text("PLAN · fix the code", style="bold magenta"))
+        for step in result.remediation_plan[:5]:
+            files = ", ".join(f"`{p}`" for p in step.files[:3]) or "n/a"
+            console.print(
+                f"  [magenta]{step.priority}.[/magenta] "
+                f"[{step.severity.upper()}] {step.title}"
+            )
+            console.print(f"     [dim]files[/dim]  {files}")
+            console.print(
+                f"     [dim]change[/dim] {_first_sentence(step.change_plan, 120)}"
+            )
+            if step.acceptance_check:
+                console.print(
+                    f"     [dim]check[/dim]  {_first_sentence(step.acceptance_check, 100)}"
+                )
+        extra = len(result.remediation_plan) - min(5, len(result.remediation_plan))
+        if extra > 0:
+            console.print(f"  [dim]… +{extra} steps → open HTML report[/dim]")
+        console.print()
 
     if result.synthesis_failed:
-        console.print("[yellow]Note: LLM synthesis skipped or failed — deterministic findings shown.[/yellow]")
+        console.print("[yellow]Note: LLM synthesis skipped — deterministic findings only.[/yellow]")
 
     cov = result.coverage
+    footer_bits: list[str] = []
     if cov:
-        console.print(
-            f"[dim]Coverage: {cov.get('audit_scanned', '?')}/{cov.get('audit_eligible', '?')} files audited"
-            f" · {cov.get('tree_files', '?')} tree files[/dim]"
+        footer_bits.append(
+            f"{cov.get('audit_scanned', '?')}/{cov.get('audit_eligible', '?')} audited"
         )
+        if cov.get("modules_read") is not None:
+            footer_bits.append(
+                f"{cov.get('modules_read', 0)}/{cov.get('modules_planned', 0)} modules"
+            )
+            footer_bits.append(f"{cov.get('files_deep_read', 0)} files deep-read")
     if saved_path:
-        console.print(f"[dim]Saved → {saved_path}[/dim]\n")
+        html_hint = saved_path.with_suffix(".html") if saved_path.suffix == ".md" else saved_path
+        footer_bits.append(f"Saved → {html_hint}")
+    if footer_bits:
+        console.print(f"[dim]{' · '.join(footer_bits)}[/dim]")
+    console.print("[dim]Cockpit → reviews/index.html[/dim]\n")
 
 
 def display_diagram(result: DiagramResult, saved_path: Optional[Path] = None) -> None:

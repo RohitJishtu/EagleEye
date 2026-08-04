@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from ...core.models import EvalFinding, RepoMap, RepoRatings
+from ...core.models import EvalFinding, RemediationStep, RepoMap, RepoRatings
 from ...features.repo_auditor import AuditResult, HealthFinding
 
 
@@ -142,3 +142,43 @@ def risk_level_from_findings(critical: list[EvalFinding], audit: AuditResult) ->
     if audit.findings:
         return "medium"
     return "low"
+
+
+_SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+
+def build_remediation_plan(
+    findings: list[EvalFinding],
+    *,
+    max_steps: int = 6,
+) -> list[RemediationStep]:
+    """Build a concrete code-change plan from findings (deterministic fallback)."""
+    ordered = sorted(findings, key=lambda f: (_SEV_ORDER.get(f.severity, 9), f.file, f.title))
+    steps: list[RemediationStep] = []
+    seen: set[tuple] = set()
+    for f in ordered:
+        key = (f.file, f.title)
+        if key in seen:
+            continue
+        seen.add(key)
+        loc = f"`{f.file}`" + (f" line {f.line}" if f.line else "")
+        steps.append(
+            RemediationStep(
+                priority=len(steps) + 1,
+                severity=f.severity,  # type: ignore[arg-type]
+                title=f.title[:80],
+                files=[f.file] if f.file else [],
+                problem=(f.description or f.title)[:400],
+                change_plan=(
+                    f.fix
+                    or f"Edit {loc}: replace the unsafe pattern with a safe equivalent and add a regression test."
+                ),
+                acceptance_check=(
+                    f"Re-run `eagleeye evaluate --no-llm` and confirm this finding is gone for {loc}."
+                ),
+            )
+        )
+        if len(steps) >= max_steps:
+            break
+    return steps
+

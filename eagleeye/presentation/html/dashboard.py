@@ -186,11 +186,15 @@ def _group_reviews(rows: list[dict]) -> list[dict]:
 def _extract_eval_summary(text: str) -> str:
     m = re.search(r"## Executive summary\n\n(.+?)(?:\n\n##|\Z)", text, re.DOTALL)
     if m:
-        return m.group(1).strip().replace("\n", " ")[:220]
-    m = re.search(r"## What this repo is\n\n(.+?)(?:\n\n##|\Z)", text, re.DOTALL)
-    if m:
-        return m.group(1).strip().replace("\n", " ")[:220]
-    return "Repo evaluation"
+        raw = m.group(1).strip().replace("\n", " ")
+    else:
+        m = re.search(r"## What this repo is\n\n(.+?)(?:\n\n##|\Z)", text, re.DOTALL)
+        raw = m.group(1).strip().replace("\n", " ") if m else "Repo evaluation"
+    for sep in (". ", "! ", "? "):
+        if sep in raw:
+            raw = raw.split(sep, 1)[0] + sep.strip()
+            break
+    return raw[:120] + ("…" if len(raw) > 120 else "")
 
 
 def _scan_evaluations() -> list[dict]:
@@ -224,6 +228,7 @@ def _scan_evaluations() -> list[dict]:
             "date": fm.get("date", ""),
             "timestamp": ts,
             "risk": risk,
+            "grade": fm.get("overall_grade", "") or "",
             "html": html_rel,
             "md": md_rel,
             "summary": _extract_eval_summary(text),
@@ -254,6 +259,7 @@ def _eval_card(r: dict) -> str:
     rm = _RISK_META.get(r["risk"], _RISK_META["UNKNOWN"])
     repo_url = f"https://github.com/{r['repo']}"
     ts = int(r["timestamp"])
+    grade = r.get("grade") or "—"
     scope_tag = (
         f'<span class="files-badge">📁 {r["scoped_path"]}</span>'
         if r.get("scoped_path") else ""
@@ -277,12 +283,13 @@ def _eval_card(r: dict) -> str:
 <div class="pr-card eval-card risk-{rm['cls']}" style="border-left-color:{rm['color']}" data-ts="{ts}" data-risk="{r['risk'].lower()}" data-type="evaluation">
   <div class="card-top">
     <div class="card-badges">
-      <span class="verdict-badge v-unknown">📋 Evaluation</span>
-      <span class="risk-badge" style="background:{rm['color']}20;color:{rm['color']};border-color:{rm['color']}40">{r['risk']} RISK</span>
+      <span class="risk-badge" style="background:{rm['color']}22;color:{rm['color']};border-color:{rm['color']}55;font-size:11px;padding:4px 10px">{r['risk']}</span>
+      <span class="verdict-badge" style="background:rgba(179,255,71,0.08);color:var(--accent);border:1px solid var(--border)">Grade {grade}</span>
     </div>
     <span class="time-ago" data-ts="{ts}" title="{r['date']}">…</span>
   </div>
-  <div class="card-title">{r['summary']}</div>
+  <div class="card-title" style="font-size:15px;letter-spacing:-0.01em">{r['repo']}</div>
+  <div style="font-size:13px;color:rgba(232,244,255,0.78);line-height:1.4">{r['summary']}</div>
   <div class="card-meta">
     <a href="{repo_url}" target="_blank" class="repo-link">{r['repo']}</a>
     <span class="files-badge">🌿 {r['branch']}</span>

@@ -16,6 +16,7 @@ def run_repo_evaluate(
     branch: Optional[str] = None,
     scoped_path: Optional[str] = None,
     no_llm: bool = False,
+    quick: bool = False,
     include_data_dirs: bool = False,
 ) -> tuple[RepoEvaluationResult, TokenUsage, str]:
     from ..graphs.repo_evaluate.graph import run_repo_evaluate_graph
@@ -27,5 +28,6 @@ def run_repo_evaluate(
         branch=branch,
         scoped_path=scoped_path,
         no_llm=no_llm,
+        quick=quick,
         include_data_dirs=include_data_dirs,
     )

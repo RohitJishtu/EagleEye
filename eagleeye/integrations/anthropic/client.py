@@ -1,4 +1,7 @@
-"""Anthropic Claude client used by the diagram generator. Prompts live in eagleeye/core/prompts/*.yml."""
+"""Anthropic Claude client — transport, auth, and token usage.
+
+Prompts live in eagleeye/core/prompts/*.yml.
+"""
 
 from __future__ import annotations
 
@@ -9,17 +12,15 @@ from typing import Optional
 
 import anthropic
 import httpx
-from pydantic import ValidationError
 
 from eagleeye.core.models import (
     AgentResult,
     BugScanResult,
-    DiagramResult,
+    ModuleReadResult,
     PRReviewResult,
     RepoEvaluationResult,
     RepoSummaryResult,
 )
-from eagleeye.core.prompt_loader import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +56,8 @@ class TokenUsage:
 _PR_REVIEW_SCHEMA = json.dumps(PRReviewResult.model_json_schema(), sort_keys=True)
 _REPO_SUMMARY_SCHEMA = json.dumps(RepoSummaryResult.model_json_schema(), sort_keys=True)
 _REPO_EVALUATION_SCHEMA = json.dumps(RepoEvaluationResult.model_json_schema(), sort_keys=True)
+_MODULE_READ_SCHEMA = json.dumps(ModuleReadResult.model_json_schema(), sort_keys=True)
 _BUG_SCAN_SCHEMA = json.dumps(BugScanResult.model_json_schema(), sort_keys=True)
-_DIAGRAM_SCHEMA = json.dumps(DiagramResult.model_json_schema(), sort_keys=True)
 _AGENT_RESULT_SCHEMA = json.dumps(AgentResult.model_json_schema(), sort_keys=True)
 
 
@@ -114,11 +115,15 @@ class AIClient:
         token = get_proxy_token(
             self._proxy_client_id, self._proxy_client_secret, self._token_url, self._scope
         )
-        # Proxy rejects top-level 'system' and cache_control beta — inject system as a primed exchange.
+        # Proxy rejects top-level 'system' and cache_control beta —
+        # inject system as a primed exchange.
         messages: list[dict] = []
         if system_prompt:
             messages.append({"role": "user", "content": [{"type": "text", "text": system_prompt}]})
-            messages.append({"role": "assistant", "content": [{"type": "text", "text": "Understood."}]})
+            messages.append({
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Understood."}],
+            })
         clean_content = [
             {"type": b["type"], "text": b["text"]}
             for b in user_content
@@ -163,89 +168,6 @@ class AIClient:
         if cache:
             block["cache_control"] = {"type": "ephemeral"}
         return block
-
-    def generate_architecture_diagram(
-        self,
-        repo_summary: RepoSummaryResult,
-        repo_name: str,
-    ) -> DiagramResult:
-        summary_text = (
-            f"Repository: {repo_name}\n"
-            f"Purpose: {repo_summary.purpose}\n"
-            f"Tech Stack: {', '.join(repo_summary.tech_stack)}\n\n"
-            f"Architecture Layers:\n"
-            + "\n".join(
-                f"  - {layer.name}: {layer.description} (files: {', '.join(layer.key_files[:5])})"
-                for layer in repo_summary.architecture_layers
-            )
-            + f"\n\nEntry Points: {', '.join(repo_summary.entry_points)}"
-            + f"\nExternal Dependencies: {', '.join(repo_summary.external_dependencies)}"
-        )
-
-        user_content = [
-            self._make_content_block(
-                f"Generate a Mermaid architecture diagram for this repository.\n\n{summary_text}\n\n"
-                f"Create a flowchart TD showing the major components, their relationships, and data flow.\n"
-                f"Use subgraphs for logical layers. Annotate edges with relationship types.\n"
-                f"Keep it readable: max 20 nodes.\n\n"
-                f"Respond with valid JSON exactly matching this schema:\n{_DIAGRAM_SCHEMA}"
-            )
-        ]
-
-        raw = self._call(get_prompt("utils.diagram"), user_content, max_tokens=4096)
-        try:
-            return DiagramResult.model_validate_json(_clean_json(raw))
-        except (ValueError, ValidationError) as exc:
-            raise RuntimeError(
-                f"Claude returned an unexpected response: {raw[:200]!r}"
-            ) from exc
-
-    def generate_change_impact_diagram(
-        self,
-        pr_review: PRReviewResult,
-        diff: str,
-        repo_name: str,
-        pr_title: str,
-    ) -> DiagramResult:
-        changed_files = [
-            line[6:]
-            for line in diff.splitlines()
-            if line.startswith("--- a/") and not line.startswith("--- a/dev/null")
-        ][:20]
-
-        review_text = (
-            f"Repository: {repo_name}\n"
-            f"PR: {pr_title}\n"
-            f"Risk Level: {pr_review.risk_level}\n"
-            f"Verdict: {pr_review.overall_verdict}\n\n"
-            f"Files Changed: {', '.join(changed_files)}\n\n"
-            f"Summary: {pr_review.summary}\n\n"
-            f"Blocking Issues: {'; '.join(pr_review.blocking_issues) or 'none'}\n\n"
-            f"File Comments:\n"
-            + "\n".join(
-                f"  [{c.severity.upper()}] {c.file}: {c.comment}"
-                for c in pr_review.file_comments[:15]
-            )
-        )
-
-        user_content = [
-            self._make_content_block(
-                f"Generate a Mermaid change-impact diagram for this pull request.\n\n{review_text}\n\n"
-                f"Create a flowchart LR showing: which files changed → what they interact with → "
-                f"downstream affected components.\n"
-                f"Highlight changed nodes with style fill:#f90,color:#000.\n"
-                f"Mark high/critical issues in red (style fill:#d00,color:#fff).\n\n"
-                f"Respond with valid JSON exactly matching this schema:\n{_DIAGRAM_SCHEMA}"
-            )
-        ]
-
-        raw = self._call(get_prompt("utils.diagram"), user_content, max_tokens=4096)
-        try:
-            return DiagramResult.model_validate_json(_clean_json(raw))
-        except (ValueError, ValidationError) as exc:
-            raise RuntimeError(
-                f"Claude returned an unexpected response: {raw[:200]!r}"
-            ) from exc
 
 
 def _clean_json(text: str) -> str:

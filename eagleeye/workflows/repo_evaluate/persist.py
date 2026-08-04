@@ -36,7 +36,19 @@ def format_evaluation_markdown(result: RepoEvaluationResult) -> str:
         f"## What this repo is\n\n{result.what_it_is}\n\n"
         f"## Problem solved\n\n{result.problem_solved}\n\n"
         f"## How it works\n\n{result.how_it_works}\n\n"
-        + _format_findings_section("Critical vulnerabilities", result.critical_vulnerabilities)
+    )
+    if result.module_reads:
+        body += "## Modules analyzed\n\n"
+        for m in result.module_reads:
+            body += (
+                f"### `{m.module}`\n"
+                f"{m.purpose}\n\n"
+                f"- Entry points: {', '.join(m.entry_points) or 'n/a'}\n"
+                f"- Data stores: {', '.join(m.data_stores) or 'n/a'}\n"
+                f"- Files read: {len(m.files_read)}\n\n"
+            )
+    body += (
+        _format_findings_section("Critical vulnerabilities", result.critical_vulnerabilities)
         + _format_findings_section("Secrets & PII risks", result.secrets_and_pii_risks)
         + f"## Future scope (stated by author)\n\n{result.future_scope_stated or '_None stated in README/docs._'}\n\n"
         f"## Future scope (inferred)\n\n{result.future_scope_inferred or '_N/A_'}\n\n"
@@ -44,6 +56,17 @@ def format_evaluation_markdown(result: RepoEvaluationResult) -> str:
         + "".join(f"- {rec}\n" for rec in result.recommendations)
         + "\n"
     )
+    if result.remediation_plan:
+        body += "## Remediation plan\n\n"
+        for step in result.remediation_plan:
+            files = ", ".join(f"`{p}`" for p in step.files) or "_n/a_"
+            body += (
+                f"### {step.priority}. [{step.severity.upper()}] {step.title}\n"
+                f"**Files:** {files}\n\n"
+                f"**Problem:** {step.problem}\n\n"
+                f"**Change plan:** {step.change_plan}\n\n"
+                f"**Acceptance check:** {step.acceptance_check}\n\n"
+            )
     if r.rating_notes:
         body += "**Rating notes:**\n" + "".join(f"- {n}\n" for n in r.rating_notes) + "\n"
     if result.confidence_notes:
@@ -56,6 +79,12 @@ def format_evaluation_markdown(result: RepoEvaluationResult) -> str:
             f"- Audit eligible: {cov.get('audit_eligible', '?')}\n"
             f"- Audit scanned: {cov.get('audit_scanned', '?')}\n"
         )
+        if cov.get("modules_planned") is not None:
+            body += (
+                f"- Modules planned: {cov.get('modules_planned', 0)}\n"
+                f"- Modules read: {cov.get('modules_read', 0)}\n"
+                f"- Files deep-read: {cov.get('files_deep_read', 0)}\n"
+            )
     if result.synthesis_failed:
         body += "\n> **Note:** LLM synthesis failed or was skipped — deterministic findings only.\n"
     return body

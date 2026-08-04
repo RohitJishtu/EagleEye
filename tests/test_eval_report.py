@@ -27,6 +27,13 @@ def test_eval_report_generates_html(tmp_path):
         "**Location:** `core/ingest.py` (line 66) | **Source:** deterministic\n\n"
         "Dynamic SQL via f-string.\n\n"
         "**Fix:** Use parameterized queries.\n"
+        "\n"
+        "## Remediation plan\n\n"
+        "### 1. [CRITICAL] Parameterize SQL in ingest\n"
+        "**Files:** `core/ingest.py`\n\n"
+        "**Problem:** Dynamic SQL via f-string.\n\n"
+        "**Change plan:** Use cursor.execute with bound parameters; add a regression test.\n\n"
+        "**Acceptance check:** Re-run eagleeye evaluate --no-llm; finding gone.\n"
     )
 
     html_path = process(md)
@@ -37,3 +44,6 @@ def test_eval_report_generates_html(tmp_path):
     assert "acme/widget" in html
     assert "SQL injection" in html
     assert "parameterized queries" in html
+    assert "Remediation plan" in html
+    assert "Change the code" in html
+    assert "Acceptance check" in html

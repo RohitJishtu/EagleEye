@@ -117,6 +117,33 @@ class RepoRatings(BaseModel):
     rating_notes: list[str] = Field(default_factory=list)
 
 
+class ModuleReadResult(BaseModel):
+    """Deep-read summary for one repo module (directory / package)."""
+
+    module: str
+    purpose: str = ""
+    entry_points: list[str] = Field(default_factory=list)
+    key_abstractions: list[str] = Field(default_factory=list)
+    data_flow: str = ""
+    data_stores: list[str] = Field(default_factory=list)
+    integrations: list[str] = Field(default_factory=list)
+    security_notes: list[str] = Field(default_factory=list)
+    gotchas: list[str] = Field(default_factory=list)
+    files_read: list[str] = Field(default_factory=list)
+
+
+class RemediationStep(BaseModel):
+    """Concrete code-change plan for one shortcoming."""
+
+    priority: int = 1
+    severity: Literal["critical", "high", "medium", "low"] = "medium"
+    title: str
+    files: list[str] = Field(default_factory=list)
+    problem: str = ""
+    change_plan: str = ""
+    acceptance_check: str = ""
+
+
 class RepoEvaluationResult(BaseModel):
     repo: str
     branch: str
@@ -130,11 +157,13 @@ class RepoEvaluationResult(BaseModel):
     future_scope_stated: str = ""
     future_scope_inferred: str = ""
     recommendations: list[str] = Field(default_factory=list)
+    remediation_plan: list[RemediationStep] = Field(default_factory=list)
     risk_level: Literal["low", "medium", "high", "critical"] = "low"
     ratings: RepoRatings = Field(default_factory=RepoRatings)
     confidence_notes: list[str] = Field(default_factory=list)
     coverage: dict[str, Any] = Field(default_factory=dict)
     synthesis_failed: bool = False
+    module_reads: list[ModuleReadResult] = Field(default_factory=list)
 
 
 class BugFinding(BaseModel):

@@ -8,21 +8,35 @@ import typer
 
 def cockpit(
     open_browser: Annotated[bool, typer.Option("--open", help="Open in browser")] = False,
+    host: Annotated[str, typer.Option(help="Cockpit bind address")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help="Cockpit port")] = 8765,
+    serve_live: Annotated[
+        bool,
+        typer.Option("--serve/--build-only", help="Serve live run/status APIs"),
+    ] = True,
 ) -> None:
-    """EagleEye Command Center — build reviews/index.html from saved reviews and evaluations."""
-    from ..presentation.html.dashboard import EVALUATIONS_DIR, REVIEWS_DIR, build_dashboard
-    from ..presentation.terminal import display_error, display_success
+    """Launch the EagleEye Command Center and its live review APIs."""
+    from ..presentation.html.dashboard import build_dashboard
+    from ..presentation.terminal import display_info, display_success
 
-    has_reviews = REVIEWS_DIR.exists() and any(REVIEWS_DIR.rglob("*.md"))
-    has_evals = EVALUATIONS_DIR.exists() and any(EVALUATIONS_DIR.rglob("eval-*.md"))
-    if not has_reviews and not has_evals:
-        display_error(
-            "No saved reviews or evaluations found. "
-            "Run `eagleeye review owner/repo 42` or `eagleeye evaluate owner/repo` first."
-        )
-        raise typer.Exit(1)
     out = build_dashboard()
     display_success(f"Cockpit built → {out}")
+    if not serve_live:
+        if open_browser:
+            import webbrowser
+
+            webbrowser.open(out.resolve().as_uri())
+        return
+
+    url = f"http://{host}:{port}"
     if open_browser:
         import webbrowser
-        webbrowser.open(out.resolve().as_uri())
+
+        webbrowser.open(url)
+    display_info(f"Cockpit live → {url} (press Ctrl+C to stop)")
+    from ..cockpit_server import serve
+
+    try:
+        serve(host=host, port=port)
+    except KeyboardInterrupt:
+        display_info("Cockpit stopped.")

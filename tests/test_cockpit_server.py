@@ -1,13 +1,11 @@
 """Tests for cockpit_server — event queue, /run, /reviews endpoints."""
 
-import pytest
-
-pytestmark = pytest.mark.skip(reason="Cockpit v2 server not implemented; static cockpit only")
-
-import json
-import time
 import http.client
+import json
+import queue
 import threading
+import time
+from types import SimpleNamespace
 
 
 def test_emit_event_puts_json_on_queue():
@@ -22,6 +20,22 @@ def test_emit_event_puts_json_on_queue():
 def test_emit_event_callable_without_server():
     from eagleeye.cockpit_server import emit_event
     emit_event({"type": "test"})  # must not raise
+
+
+def test_emit_event_broadcasts_to_all_subscribers():
+    import eagleeye.cockpit_server as cs
+
+    first: queue.Queue[str] = queue.Queue()
+    second: queue.Queue[str] = queue.Queue()
+    with cs._state_lock:
+        cs._event_subscribers.update((first, second))
+    try:
+        cs.emit_event({"type": "status"})
+        assert json.loads(first.get_nowait()) == {"type": "status"}
+        assert json.loads(second.get_nowait()) == {"type": "status"}
+    finally:
+        with cs._state_lock:
+            cs._event_subscribers.difference_update((first, second))
 
 
 def _start_server(port: int) -> None:
@@ -61,6 +75,8 @@ def test_run_returns_200_when_idle(monkeypatch):
 def test_reviews_endpoint_returns_json(monkeypatch):
     monkeypatch.setattr("eagleeye.presentation.html.dashboard._scan_reviews", lambda: [])
     monkeypatch.setattr("eagleeye.presentation.html.dashboard._group_reviews", lambda rows: [])
+    monkeypatch.setattr("eagleeye.presentation.html.dashboard._scan_evaluations", lambda: [])
+    monkeypatch.setattr("eagleeye.presentation.html.dashboard._group_evaluations", lambda rows: [])
     _start_server(17893)
     conn = http.client.HTTPConnection("localhost", 17893, timeout=3)
     conn.request("GET", "/reviews")
@@ -68,3 +84,111 @@ def test_reviews_endpoint_returns_json(monkeypatch):
     assert resp.status == 200
     assert isinstance(json.loads(resp.read()), list)
     conn.close()
+
+
+def test_feedback_endpoint_records_false_positives(monkeypatch, tmp_path):
+    import eagleeye.cockpit_server as cs
+
+    monkeypatch.setattr(cs, "eagleeye_home", lambda: tmp_path)
+    _start_server(17894)
+    conn = http.client.HTTPConnection("localhost", 17894, timeout=3)
+    body = json.dumps(
+        {"run_id": "pilot-run", "false_positives": 2, "notes": "Two noisy findings"}
+    ).encode()
+    conn.request("POST", "/feedback", body=body, headers={"Content-Type": "application/json"})
+    resp = conn.getresponse()
+    assert resp.status == 200
+    assert json.loads(resp.read())["status"] == "recorded"
+    conn.close()
+    assert cs._pilot_metrics()["false_positives_reported"] == 2
+
+
+def test_artifact_lookup_does_not_reuse_an_old_report(monkeypatch, tmp_path):
+    import eagleeye.cockpit_server as cs
+
+    monkeypatch.setattr(cs, "reviews_root", lambda: tmp_path)
+    repo_dir = tmp_path / "acme-demo"
+    repo_dir.mkdir()
+    report = repo_dir / "pr-7-old-100.md"
+    report.write_text("old")
+
+    assert cs._artifact_for_review("acme", "demo", 7, time.time() + 10) == {}
+    assert cs._artifact_for_review("acme", "demo", 7, time.time() - 1)["markdown"].endswith(
+        report.name
+    )
+
+
+def test_review_lifecycle_completes_through_feature_boundary(monkeypatch, tmp_path):
+    import eagleeye.cockpit_server as cs
+    import eagleeye.core.config as config_module
+    import eagleeye.features.pr_review as feature_module
+
+    monkeypatch.setattr(cs, "eagleeye_home", lambda: tmp_path)
+    result = SimpleNamespace(overall_verdict="approve", risk_level="low")
+    usage = SimpleNamespace(
+        total_input=100,
+        output_tokens=20,
+        input_tokens=100,
+        cache_creation_input_tokens=0,
+        cache_read_input_tokens=0,
+    )
+    monkeypatch.setattr(config_module, "load_config", lambda: object())
+    monkeypatch.setattr(
+        feature_module,
+        "run_pr_review",
+        lambda owner, repo, pr, post, config: (
+            result,
+            "",
+            usage,
+            None,
+            {"title": "Pilot PR"},
+        ),
+    )
+    cs._current_run = {
+        "id": "pilot",
+        "owner": "acme",
+        "repo": "demo",
+        "pr_number": 7,
+        "status": "queued",
+    }
+    cs._review_active = True
+
+    cs._run_review_in_thread("acme", "demo", 7)
+
+    status = cs.get_status()
+    assert status["active"] is False
+    assert status["current"]["status"] == "completed"
+    assert status["current"]["title"] == "Pilot PR"
+    assert status["current"]["token_usage"]["cost_usd"] > 0
+    metrics = cs._pilot_metrics()
+    assert metrics["completed"] == 1
+    assert metrics["failed"] == 0
+    assert metrics["average_latency_seconds"] >= 0
+
+
+def test_review_lifecycle_records_failure(monkeypatch, tmp_path):
+    import eagleeye.cockpit_server as cs
+    import eagleeye.core.config as config_module
+
+    monkeypatch.setattr(cs, "eagleeye_home", lambda: tmp_path)
+    monkeypatch.setattr(
+        config_module,
+        "load_config",
+        lambda: (_ for _ in ()).throw(RuntimeError("bad auth")),
+    )
+    cs._current_run = {
+        "id": "failed-pilot",
+        "owner": "acme",
+        "repo": "demo",
+        "pr_number": 8,
+        "status": "queued",
+    }
+    cs._review_active = True
+
+    cs._run_review_in_thread("acme", "demo", 8)
+
+    status = cs.get_status()
+    assert status["active"] is False
+    assert status["current"]["status"] == "failed"
+    assert status["current"]["error"] == "bad auth"
+    assert cs._pilot_metrics()["failure_rate"] == 1.0

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime
 from pathlib import Path
-import os
 
 from ...core.paths import evaluations_root, reviews_root
 
@@ -368,7 +368,10 @@ def _pr_card(r: dict) -> str:
   </div>
   <div class="card-footer">
     <span class="reviewed-at">🕐 {r['date']}</span>
-    <a href="{report_href}" target="_blank" class="open-btn">Open Report ↗</a>
+    <span>
+      <button class="open-btn" style="cursor:pointer" onclick="rerunReview('{r['owner']}','{r['repo_name']}',{r['pr_number']})">Re-run</button>
+      <a href="{report_href}" target="_blank" class="open-btn">Open Report ↗</a>
+    </span>
   </div>
   {history_html}
 </div>"""
@@ -500,6 +503,14 @@ def build_dashboard() -> Path:
   .tab-btn.active {{ color: var(--accent); border-bottom-color: var(--accent); }}
   .tab-panel {{ display: none; }}
   .tab-panel.active {{ display: block; }}
+  .run-panel {{ margin: 20px 32px 0; padding: 16px 20px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
+  .run-panel input {{ background: var(--card); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: 8px 10px; outline: none; min-width: 120px; }}
+  .run-panel input:focus {{ border-color: var(--accent); }}
+  .run-panel button {{ background: var(--accent); border: 0; border-radius: 8px; color: var(--bg); cursor: pointer; font-weight: 700; padding: 9px 15px; }}
+  .run-panel button:disabled {{ cursor: wait; opacity: 0.5; }}
+  .run-state {{ color: var(--muted); flex: 1; font-size: 12px; min-width: 240px; }}
+  .run-state[data-status="completed"] {{ color: var(--approve); }}
+  .run-state[data-status="failed"] {{ color: var(--block); }}
 </style>
 </head>
 <body>
@@ -520,6 +531,17 @@ def build_dashboard() -> Path:
     </div>
   </div>
 </div>
+
+<form class="run-panel" id="run-form" onsubmit="startReview(event)">
+  <strong>Run review</strong>
+  <input id="run-owner" required placeholder="owner" aria-label="Repository owner" />
+  <input id="run-repo" required placeholder="repository" aria-label="Repository name" />
+  <input id="run-pr" required min="1" type="number" placeholder="PR #" aria-label="Pull request number" style="min-width:80px;width:90px" />
+  <button id="run-button" type="submit">Launch</button>
+  <button id="feedback-button" type="button" style="display:none" onclick="recordFeedback()">Record feedback</button>
+  <span class="run-state" id="run-state">Live status is available when opened with <code>eagleeye cockpit</code>.</span>
+  <span class="run-state" id="pilot-metrics"></span>
+</form>
 
 <div class="tab-bar">
   <button class="tab-btn active" onclick="switchTab('reviews', this)">PR Reviews ({total})</button>
@@ -572,6 +594,113 @@ def build_dashboard() -> Path:
 </div>
 
 <script>
+var _runState = document.getElementById('run-state');
+var _runButton = document.getElementById('run-button');
+var _feedbackButton = document.getElementById('feedback-button');
+var _currentRun = null;
+function showRun(run) {{
+  _currentRun = run;
+  if (!run) {{
+    _runState.textContent = 'Ready to launch a PR review.';
+    _runState.dataset.status = '';
+    _runButton.disabled = false;
+    _feedbackButton.style.display = 'none';
+    return;
+  }}
+  var label = run.owner + '/' + run.repo + ' #' + run.pr_number + ' — ' + run.status;
+  if (run.duration_seconds !== undefined) label += ' (' + run.duration_seconds + 's)';
+  if (run.error) label += ': ' + run.error;
+  _runState.textContent = label;
+  if (run.status === 'completed' && run.artifacts) {{
+    var artifactUrl = run.artifacts.html || run.artifacts.markdown;
+    if (artifactUrl) {{
+      var link = document.createElement('a');
+      link.href = artifactUrl;
+      link.target = '_blank';
+      link.className = 'open-btn';
+      link.textContent = 'Open report ↗';
+      _runState.appendChild(document.createTextNode(' '));
+      _runState.appendChild(link);
+    }}
+  }}
+  _runState.dataset.status = run.status;
+  _runButton.disabled = run.status === 'queued' || run.status === 'running';
+  _feedbackButton.style.display = run.status === 'completed' ? '' : 'none';
+}}
+function startReview(event) {{
+  event.preventDefault();
+  _runButton.disabled = true;
+  fetch('/run', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{
+      owner: document.getElementById('run-owner').value.trim(),
+      repo: document.getElementById('run-repo').value.trim(),
+      pr_number: parseInt(document.getElementById('run-pr').value)
+    }})
+  }}).then(function(response) {{
+    return response.json().then(function(body) {{
+      if (!response.ok) throw new Error(body.error || 'Could not start review');
+      showRun(body.run);
+    }});
+  }}).catch(function(error) {{
+    _runState.textContent = error.message;
+    _runState.dataset.status = 'failed';
+    _runButton.disabled = false;
+  }});
+}}
+function rerunReview(owner, repo, prNumber) {{
+  document.getElementById('run-owner').value = owner;
+  document.getElementById('run-repo').value = repo;
+  document.getElementById('run-pr').value = prNumber;
+  document.getElementById('run-form').requestSubmit();
+  window.scrollTo({{top: 0, behavior: 'smooth'}});
+}}
+function refreshMetrics() {{
+  fetch('/metrics').then(function(response) {{ return response.json(); }}).then(function(metrics) {{
+    document.getElementById('pilot-metrics').textContent =
+      metrics.runs + ' pilot runs · ' +
+      Math.round(metrics.failure_rate * 100) + '% failures · ' +
+      metrics.average_latency_seconds + 's avg · $' +
+      metrics.total_cost_usd.toFixed(4) + ' · ' +
+      metrics.false_positives_reported + ' false positives';
+  }}).catch(function() {{}});
+}}
+function recordFeedback() {{
+  if (!_currentRun) return;
+  var count = window.prompt('How many findings were false positives?', '0');
+  if (count === null) return;
+  var notes = window.prompt('Optional feedback notes', '') || '';
+  fetch('/feedback', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{run_id: _currentRun.id, false_positives: parseInt(count), notes: notes}})
+  }}).then(function(response) {{
+    if (!response.ok) throw new Error();
+    _feedbackButton.textContent = 'Feedback recorded';
+    _feedbackButton.disabled = true;
+    refreshMetrics();
+  }}).catch(function() {{ _runState.textContent = 'Could not record feedback.'; }});
+}}
+fetch('/status').then(function(response) {{
+  if (response.ok) return response.json();
+  throw new Error();
+}}).then(function(body) {{ showRun(body.current); }}).catch(function() {{
+  _runState.textContent = 'Static Cockpit — run `eagleeye cockpit` for live reviews.';
+}});
+if (window.EventSource) {{
+  var events = new EventSource('/events');
+  events.onmessage = function(message) {{
+    var event = JSON.parse(message.data);
+    if (event.type === 'run_status') {{
+      if (_currentRun && event.run.updated_at < (_currentRun.updated_at || 0)) return;
+      showRun(event.run);
+      if (event.status === 'completed') refreshMetrics();
+    }}
+  }};
+}}
+refreshMetrics();
+
 function switchTab(name, btn) {{
   document.querySelectorAll('.tab-btn').forEach(function(b) {{ b.classList.remove('active'); }});
   btn.classList.add('active');

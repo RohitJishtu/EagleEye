@@ -91,7 +91,15 @@ Reviews are saved under `reviews/<owner>-<repo>/`.
 eagleeye cockpit --open
 ```
 
-Opens `reviews/index.html` — a static summary of all saved reviews. Per-PR HTML reports live alongside the markdown files.
+Starts the live Cockpit at `http://127.0.0.1:8765`. From the dashboard you can
+launch one PR review at a time, watch it move through queued, running, completed,
+or failed state, and open generated review and evaluation artifacts. Reviews
+launched from Cockpit use the same feature workflow as `eagleeye review` and do
+not post a GitHub comment. Cockpit records run latency, estimated token cost,
+failure rate, and optional false-positive feedback for pilot evaluation.
+
+Use `eagleeye cockpit --build-only --open` when you only want the static
+`reviews/index.html` dashboard.
 
 ---
 
@@ -136,7 +144,7 @@ Start the server: `eagleeye-mcp`
 | `eagleeye understand build` | Lightweight repo map (tree, README, signals) |
 | `eagleeye scan` | Security / bug scan |
 | `eagleeye list-prs` | List open PRs |
-| `eagleeye cockpit` | Build/open review dashboard |
+| `eagleeye cockpit` | Launch live review dashboard (`--build-only` for static HTML) |
 | `eagleeye lineage …` | Snowflake lineage snapshot tools (optional extra) |
 | `eagleeye setup` | Register MCP in Claude Code |
 

@@ -55,7 +55,7 @@ def evaluate(
     By default deep-reads important modules then synthesizes one evaluation.
     Use --quick for the lighter single-pass path, or --no-llm for audit-only.
     """
-    config = _load_or_exit()
+    config = _load_or_exit(require_claude=not no_llm)
     owner, repo_name = _parse_repo(repo)
     use_quick = quick or no_deep_scan
 

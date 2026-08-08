@@ -92,11 +92,13 @@ eagleeye cockpit --open
 ```
 
 Starts the live Cockpit at `http://127.0.0.1:8765`. From the dashboard you can
-launch one PR review at a time, watch it move through queued, running, completed,
-or failed state, and open generated review and evaluation artifacts. Reviews
-launched from Cockpit use the same feature workflow as `eagleeye review` and do
-not post a GitHub comment. Cockpit records run latency, estimated token cost,
-failure rate, and optional false-positive feedback for pilot evaluation.
+launch PR reviews or repository evaluations, watch them move through queued,
+running, completed, or failed state, and open generated artifacts. Evaluation
+controls include branch/path scope, quick mode, deterministic no-LLM mode, and
+optional data-directory inclusion. Cockpit uses the same feature workflows as
+the corresponding CLI commands; PR reviews do not post a GitHub comment.
+Cockpit records run latency, estimated token cost, failure rate, and optional
+false-positive feedback for pilot evaluation.
 
 Use `eagleeye cockpit --build-only --open` when you only want the static
 `reviews/index.html` dashboard.

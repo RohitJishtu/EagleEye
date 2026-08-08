@@ -1,8 +1,9 @@
 """Tests for eagleeye.config."""
 
-import pytest
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from eagleeye.config import ConfigError, load_config, write_config
 
@@ -42,6 +43,19 @@ def test_load_config_missing_anthropic_only(monkeypatch):
             load_config()
 
     assert "ANTHROPIC_API_KEY" in str(exc_info.value)
+
+
+def test_load_config_can_skip_claude_for_no_llm_evaluation(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUTH_MODE", "direct")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr("eagleeye.config._CONFIG_PATH", tmp_path / "config.yml")
+    monkeypatch.setattr("eagleeye.config._CONFIG_PATH_TOML", tmp_path / "config.toml")
+
+    config = load_config(require_claude=False)
+
+    assert config.github_token == "ghp_test"
+    assert config.anthropic_api_key == ""
 
 
 def test_load_config_proxy_mode_missing_credentials(monkeypatch):

@@ -1,4 +1,4 @@
-"""Live Cockpit HTTP server for launching and monitoring PR reviews."""
+"""Live Cockpit HTTP server for launching reviews and repository evaluations."""
 from __future__ import annotations
 
 import json
@@ -90,6 +90,20 @@ def _artifact_for_review(
     }
     if html_path.exists():
         artifact["html"] = f"/artifacts/reviews/{owner}-{repo}/{html_path.name}"
+    return artifact
+
+
+def _artifact_for_evaluation(saved_path: str | Path) -> dict[str, str]:
+    path = Path(saved_path).resolve()
+    try:
+        relative = path.relative_to(evaluations_root().resolve()).as_posix()
+    except ValueError:
+        return {}
+    artifact = {"markdown": f"/artifacts/evaluations/{relative}"}
+    html_path = path.with_suffix(".html")
+    if html_path.exists():
+        html_relative = html_path.relative_to(evaluations_root().resolve()).as_posix()
+        artifact["html"] = f"/artifacts/evaluations/{html_relative}"
     return artifact
 
 
@@ -208,6 +222,62 @@ def _run_review_in_thread(owner: str, repo: str, pr_number: int) -> None:
             _review_active = False
 
 
+def _run_evaluation_in_thread(
+    owner: str,
+    repo: str,
+    branch: str | None,
+    scoped_path: str | None,
+    no_llm: bool,
+    quick: bool,
+    include_data_dirs: bool,
+) -> None:
+    """Run one repository evaluation through the CLI's feature boundary."""
+    global _review_active
+    started = time.time()
+    _transition("running", started_at=started)
+    try:
+        from .core.config import load_config
+        from .features.repo_evaluate import run_repo_evaluate
+
+        config = load_config(require_claude=not no_llm)
+        result, token_usage, saved_path = run_repo_evaluate(
+            owner,
+            repo,
+            config,
+            branch=branch,
+            scoped_path=scoped_path,
+            no_llm=no_llm,
+            quick=quick,
+            include_data_dirs=include_data_dirs,
+        )
+        finished = time.time()
+        completed_run = _transition(
+            "completed",
+            completed_at=finished,
+            duration_seconds=round(finished - started, 3),
+            risk_level=result.risk_level,
+            grade=result.ratings.overall_grade,
+            artifacts=_artifact_for_evaluation(saved_path),
+            token_usage=_token_metrics(token_usage),
+            title=f"Evaluation: {owner}/{repo}",
+        )
+        if completed_run:
+            _append_pilot_record("cockpit-runs.jsonl", completed_run)
+    except Exception as exc:
+        finished = time.time()
+        failed_run = _transition(
+            "failed",
+            completed_at=finished,
+            duration_seconds=round(finished - started, 3),
+            error=str(exc),
+        )
+        if failed_run:
+            _append_pilot_record("cockpit-runs.jsonl", failed_run)
+    finally:
+        with _state_lock:
+            _review_active = False
+
+
 def _start_review(owner: str, repo: str, pr_number: int) -> tuple[bool, dict[str, Any]]:
     global _current_run, _review_active
     now = time.time()
@@ -216,6 +286,7 @@ def _start_review(owner: str, repo: str, pr_number: int) -> tuple[bool, dict[str
             return False, dict(_current_run or {})
         run = {
             "id": uuid.uuid4().hex,
+            "kind": "review",
             "owner": owner,
             "repo": repo,
             "pr_number": pr_number,
@@ -232,6 +303,49 @@ def _start_review(owner: str, repo: str, pr_number: int) -> tuple[bool, dict[str
         args=(owner, repo, pr_number),
         daemon=True,
         name=f"eagleeye-review-{run['id'][:8]}",
+    )
+    thread.start()
+    return True, dict(run)
+
+
+def _start_evaluation(
+    owner: str,
+    repo: str,
+    *,
+    branch: str | None = None,
+    scoped_path: str | None = None,
+    no_llm: bool = False,
+    quick: bool = False,
+    include_data_dirs: bool = False,
+) -> tuple[bool, dict[str, Any]]:
+    global _current_run, _review_active
+    now = time.time()
+    with _state_lock:
+        if _review_active:
+            return False, dict(_current_run or {})
+        run = {
+            "id": uuid.uuid4().hex,
+            "kind": "evaluation",
+            "owner": owner,
+            "repo": repo,
+            "branch": branch,
+            "scoped_path": scoped_path,
+            "no_llm": no_llm,
+            "quick": quick,
+            "include_data_dirs": include_data_dirs,
+            "status": "queued",
+            "created_at": now,
+            "updated_at": now,
+        }
+        _review_active = True
+        _current_run = run
+        _runs.append(run)
+    emit_event({"type": "run_status", "status": "queued", "run": dict(run)})
+    thread = threading.Thread(
+        target=_run_evaluation_in_thread,
+        args=(owner, repo, branch, scoped_path, no_llm, quick, include_data_dirs),
+        daemon=True,
+        name=f"eagleeye-evaluate-{run['id'][:8]}",
     )
     thread.start()
     return True, dict(run)
@@ -363,7 +477,7 @@ class CockpitHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in ("/run", "/feedback"):
+        if path not in ("/run", "/evaluate", "/feedback"):
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         try:
@@ -398,11 +512,57 @@ class CockpitHandler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.OK, {"status": "recorded"})
             return
 
+        valid_slug = re.compile(r"^[A-Za-z0-9_.-]+$")
+        if path == "/evaluate":
+            try:
+                owner = str(payload["owner"]).strip()
+                repo = str(payload["repo"]).strip()
+                branch = str(payload.get("branch") or "").strip() or None
+                scoped_path = str(payload.get("path") or "").strip() or None
+                mode_values = {
+                    "no_llm": payload.get("no_llm", False),
+                    "quick": payload.get("quick", False),
+                    "include_data_dirs": payload.get("include_data_dirs", False),
+                }
+                if not all(isinstance(value, bool) for value in mode_values.values()):
+                    raise ValueError
+                no_llm = mode_values["no_llm"]
+                quick = mode_values["quick"]
+                include_data_dirs = mode_values["include_data_dirs"]
+                if not valid_slug.fullmatch(owner) or not valid_slug.fullmatch(repo):
+                    raise ValueError
+                if scoped_path and (
+                    ".." in Path(scoped_path).parts or Path(scoped_path).is_absolute()
+                ):
+                    raise ValueError
+            except (KeyError, TypeError, ValueError):
+                self._json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"error": "valid owner, repo, branch, and relative path are required"},
+                )
+                return
+            started, run = _start_evaluation(
+                owner,
+                repo,
+                branch=branch,
+                scoped_path=scoped_path,
+                no_llm=no_llm,
+                quick=quick,
+                include_data_dirs=include_data_dirs,
+            )
+            if not started:
+                self._json(
+                    HTTPStatus.CONFLICT,
+                    {"error": "a Cockpit job is already active", "run": run},
+                )
+                return
+            self._json(HTTPStatus.OK, {"status": "started", "run": run})
+            return
+
         try:
             owner = str(payload["owner"]).strip()
             repo = str(payload["repo"]).strip()
             pr_number = int(payload["pr_number"])
-            valid_slug = re.compile(r"^[A-Za-z0-9_.-]+$")
             if (
                 not valid_slug.fullmatch(owner)
                 or not valid_slug.fullmatch(repo)
@@ -420,7 +580,7 @@ class CockpitHandler(BaseHTTPRequestHandler):
         if not started:
             self._json(
                 HTTPStatus.CONFLICT,
-                {"error": "a review is already active", "run": run},
+                {"error": "a Cockpit job is already active", "run": run},
             )
             return
         self._json(HTTPStatus.OK, {"status": "started", "run": run})

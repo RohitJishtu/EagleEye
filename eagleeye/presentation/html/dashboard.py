@@ -6,6 +6,7 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from ...core.paths import evaluations_root, reviews_root
 
@@ -278,6 +279,9 @@ def _eval_card(r: dict) -> str:
         history_html = f'<div class="run-history"><span class="run-history-label">Prev runs:</span>{prev_links}</div>'
 
     report_href = r["html"] if r.get("html") else r["md"]
+    rerun_repo = quote(str(r["repo"]), safe="")
+    rerun_branch = quote(str(r["branch"]), safe="")
+    rerun_path = quote(str(r.get("scoped_path", "")), safe="")
 
     return f"""
 <div class="pr-card eval-card risk-{rm['cls']}" style="border-left-color:{rm['color']}" data-ts="{ts}" data-risk="{r['risk'].lower()}" data-type="evaluation">
@@ -298,7 +302,10 @@ def _eval_card(r: dict) -> str:
   </div>
   <div class="card-footer">
     <span class="reviewed-at">🕐 {r['date']}</span>
-    <a href="{report_href}" target="_blank" class="open-btn">Open Report ↗</a>
+    <span>
+      <button class="open-btn" style="cursor:pointer" onclick="rerunEvaluation('{rerun_repo}','{rerun_branch}','{rerun_path}')">Re-run</button>
+      <a href="{report_href}" target="_blank" class="open-btn">Open Report ↗</a>
+    </span>
   </div>
   {history_html}
 </div>"""
@@ -508,6 +515,10 @@ def build_dashboard() -> Path:
   .run-panel input:focus {{ border-color: var(--accent); }}
   .run-panel button {{ background: var(--accent); border: 0; border-radius: 8px; color: var(--bg); cursor: pointer; font-weight: 700; padding: 9px 15px; }}
   .run-panel button:disabled {{ cursor: wait; opacity: 0.5; }}
+  .run-controls {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; }}
+  .run-options {{ display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 11px; }}
+  .run-options input {{ min-width: auto; }}
+  .run-divider {{ width: 100%; border-top: 1px solid var(--border); }}
   .run-state {{ color: var(--muted); flex: 1; font-size: 12px; min-width: 240px; }}
   .run-state[data-status="completed"] {{ color: var(--approve); }}
   .run-state[data-status="failed"] {{ color: var(--block); }}
@@ -532,16 +543,32 @@ def build_dashboard() -> Path:
   </div>
 </div>
 
-<form class="run-panel" id="run-form" onsubmit="startReview(event)">
-  <strong>Run review</strong>
-  <input id="run-owner" required placeholder="owner" aria-label="Repository owner" />
-  <input id="run-repo" required placeholder="repository" aria-label="Repository name" />
-  <input id="run-pr" required min="1" type="number" placeholder="PR #" aria-label="Pull request number" style="min-width:80px;width:90px" />
-  <button id="run-button" type="submit">Launch</button>
+<div class="run-panel">
+  <form class="run-controls" id="run-form" onsubmit="startReview(event)">
+    <strong>Run PR review</strong>
+    <input id="run-owner" required placeholder="owner" aria-label="Repository owner" />
+    <input id="run-repo" required placeholder="repository" aria-label="Repository name" />
+    <input id="run-pr" required min="1" type="number" placeholder="PR #" aria-label="Pull request number" style="min-width:80px;width:90px" />
+    <button id="run-button" type="submit">Review</button>
+  </form>
+  <div class="run-divider"></div>
+  <form class="run-controls" id="evaluate-form" onsubmit="startEvaluation(event)">
+    <strong>Run repo evaluation</strong>
+    <input id="eval-owner" required placeholder="owner" aria-label="Evaluation repository owner" />
+    <input id="eval-repo" required placeholder="repository" aria-label="Evaluation repository name" />
+    <input id="eval-branch" placeholder="branch (default)" aria-label="Evaluation branch" />
+    <input id="eval-path" placeholder="path (optional)" aria-label="Evaluation path scope" />
+    <span class="run-options">
+      <label><input id="eval-quick" type="checkbox" /> Quick</label>
+      <label><input id="eval-no-llm" type="checkbox" /> No LLM</label>
+      <label><input id="eval-data" type="checkbox" /> Include data dirs</label>
+    </span>
+    <button id="evaluate-button" type="submit">Evaluate</button>
+  </form>
   <button id="feedback-button" type="button" style="display:none" onclick="recordFeedback()">Record feedback</button>
   <span class="run-state" id="run-state">Live status is available when opened with <code>eagleeye cockpit</code>.</span>
   <span class="run-state" id="pilot-metrics"></span>
-</form>
+</div>
 
 <div class="tab-bar">
   <button class="tab-btn active" onclick="switchTab('reviews', this)">PR Reviews ({total})</button>
@@ -596,18 +623,22 @@ def build_dashboard() -> Path:
 <script>
 var _runState = document.getElementById('run-state');
 var _runButton = document.getElementById('run-button');
+var _evaluateButton = document.getElementById('evaluate-button');
 var _feedbackButton = document.getElementById('feedback-button');
 var _currentRun = null;
 function showRun(run) {{
   _currentRun = run;
   if (!run) {{
-    _runState.textContent = 'Ready to launch a PR review.';
+    _runState.textContent = 'Ready to launch a PR review or repository evaluation.';
     _runState.dataset.status = '';
     _runButton.disabled = false;
+    _evaluateButton.disabled = false;
     _feedbackButton.style.display = 'none';
     return;
   }}
-  var label = run.owner + '/' + run.repo + ' #' + run.pr_number + ' — ' + run.status;
+  var label = run.owner + '/' + run.repo;
+  if (run.kind === 'review') label += ' #' + run.pr_number;
+  label += ' — ' + (run.kind || 'review') + ' ' + run.status;
   if (run.duration_seconds !== undefined) label += ' (' + run.duration_seconds + 's)';
   if (run.error) label += ': ' + run.error;
   _runState.textContent = label;
@@ -624,7 +655,9 @@ function showRun(run) {{
     }}
   }}
   _runState.dataset.status = run.status;
-  _runButton.disabled = run.status === 'queued' || run.status === 'running';
+  var active = run.status === 'queued' || run.status === 'running';
+  _runButton.disabled = active;
+  _evaluateButton.disabled = active;
   _feedbackButton.style.display = run.status === 'completed' ? '' : 'none';
 }}
 function startReview(event) {{
@@ -649,11 +682,49 @@ function startReview(event) {{
     _runButton.disabled = false;
   }});
 }}
+function startEvaluation(event) {{
+  event.preventDefault();
+  _evaluateButton.disabled = true;
+  fetch('/evaluate', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{
+      owner: document.getElementById('eval-owner').value.trim(),
+      repo: document.getElementById('eval-repo').value.trim(),
+      branch: document.getElementById('eval-branch').value.trim(),
+      path: document.getElementById('eval-path').value.trim(),
+      quick: document.getElementById('eval-quick').checked,
+      no_llm: document.getElementById('eval-no-llm').checked,
+      include_data_dirs: document.getElementById('eval-data').checked
+    }})
+  }}).then(function(response) {{
+    return response.json().then(function(body) {{
+      if (!response.ok) throw new Error(body.error || 'Could not start evaluation');
+      showRun(body.run);
+    }});
+  }}).catch(function(error) {{
+    _runState.textContent = error.message;
+    _runState.dataset.status = 'failed';
+    _evaluateButton.disabled = false;
+  }});
+}}
 function rerunReview(owner, repo, prNumber) {{
   document.getElementById('run-owner').value = owner;
   document.getElementById('run-repo').value = repo;
   document.getElementById('run-pr').value = prNumber;
   document.getElementById('run-form').requestSubmit();
+  window.scrollTo({{top: 0, behavior: 'smooth'}});
+}}
+function rerunEvaluation(repoSlug, branch, scopedPath) {{
+  repoSlug = decodeURIComponent(repoSlug);
+  branch = decodeURIComponent(branch);
+  scopedPath = decodeURIComponent(scopedPath);
+  var parts = repoSlug.split('/');
+  document.getElementById('eval-owner').value = parts.shift() || '';
+  document.getElementById('eval-repo').value = parts.join('/');
+  document.getElementById('eval-branch').value = branch || '';
+  document.getElementById('eval-path').value = scopedPath || '';
+  document.getElementById('evaluate-form').requestSubmit();
   window.scrollTo({{top: 0, behavior: 'smooth'}});
 }}
 function refreshMetrics() {{

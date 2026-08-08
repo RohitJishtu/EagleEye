@@ -72,6 +72,37 @@ def test_run_returns_200_when_idle(monkeypatch):
     conn.close()
 
 
+def test_evaluate_returns_200_with_mode_options(monkeypatch):
+    import eagleeye.cockpit_server as cs
+
+    monkeypatch.setattr(cs, "_review_active", False)
+    monkeypatch.setattr(cs, "_run_evaluation_in_thread", lambda *args: None)
+    _start_server(17895)
+    conn = http.client.HTTPConnection("localhost", 17895, timeout=3)
+    body = json.dumps(
+        {
+            "owner": "acme",
+            "repo": "demo",
+            "branch": "develop",
+            "path": "src/core",
+            "quick": True,
+            "no_llm": True,
+            "include_data_dirs": False,
+        }
+    ).encode()
+    conn.request("POST", "/evaluate", body=body, headers={"Content-Type": "application/json"})
+    resp = conn.getresponse()
+    assert resp.status == 200
+    run = json.loads(resp.read())["run"]
+    assert run["kind"] == "evaluation"
+    assert run["branch"] == "develop"
+    assert run["scoped_path"] == "src/core"
+    assert run["quick"] is True
+    assert run["no_llm"] is True
+    conn.close()
+    monkeypatch.setattr(cs, "_review_active", False)
+
+
 def test_reviews_endpoint_returns_json(monkeypatch):
     monkeypatch.setattr("eagleeye.presentation.html.dashboard._scan_reviews", lambda: [])
     monkeypatch.setattr("eagleeye.presentation.html.dashboard._group_reviews", lambda rows: [])
@@ -192,3 +223,66 @@ def test_review_lifecycle_records_failure(monkeypatch, tmp_path):
     assert status["current"]["status"] == "failed"
     assert status["current"]["error"] == "bad auth"
     assert cs._pilot_metrics()["failure_rate"] == 1.0
+
+
+def test_evaluation_lifecycle_completes_through_feature_boundary(monkeypatch, tmp_path):
+    import eagleeye.cockpit_server as cs
+    import eagleeye.core.config as config_module
+    import eagleeye.features.repo_evaluate as feature_module
+
+    evaluation_root = tmp_path / "evaluations"
+    saved_path = evaluation_root / "acme-demo" / "eval-demo-1.md"
+    saved_path.parent.mkdir(parents=True)
+    saved_path.write_text("evaluation")
+    saved_path.with_suffix(".html").write_text("<html></html>")
+    monkeypatch.setattr(cs, "eagleeye_home", lambda: tmp_path)
+    monkeypatch.setattr(cs, "evaluations_root", lambda: evaluation_root)
+    monkeypatch.setattr(config_module, "load_config", lambda require_claude=True: object())
+    captured = {}
+
+    def fake_evaluate(owner, repo, config, **kwargs):
+        captured.update(kwargs)
+        result = SimpleNamespace(
+            risk_level="medium",
+            ratings=SimpleNamespace(overall_grade="B"),
+        )
+        usage = SimpleNamespace(
+            total_input=0,
+            output_tokens=0,
+            input_tokens=0,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+        )
+        return result, usage, str(saved_path)
+
+    monkeypatch.setattr(feature_module, "run_repo_evaluate", fake_evaluate)
+    cs._current_run = {
+        "id": "evaluate-pilot",
+        "kind": "evaluation",
+        "owner": "acme",
+        "repo": "demo",
+        "status": "queued",
+    }
+    cs._review_active = True
+
+    cs._run_evaluation_in_thread(
+        "acme",
+        "demo",
+        "develop",
+        "src",
+        True,
+        True,
+        False,
+    )
+
+    current = cs.get_status()["current"]
+    assert current["status"] == "completed"
+    assert current["grade"] == "B"
+    assert current["artifacts"]["html"].endswith("eval-demo-1.html")
+    assert captured == {
+        "branch": "develop",
+        "scoped_path": "src",
+        "no_llm": True,
+        "quick": True,
+        "include_data_dirs": False,
+    }

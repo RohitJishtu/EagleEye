@@ -83,4 +83,6 @@ def test_build_dashboard_includes_evaluations_tab(cockpit_dirs):
     assert "acme/widget" in html
     assert "../evaluations/acme-widget/eval-test-1700000000.html" in html
     assert 'id="run-form"' in html
+    assert 'id="evaluate-form"' in html
+    assert "fetch('/evaluate'" in html
     assert "new EventSource('/events')" in html

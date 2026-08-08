@@ -17,10 +17,10 @@ from ..core.config import (
 from ..presentation.terminal import display_error
 
 
-def _load_or_exit() -> EagleEyeConfig:
+def _load_or_exit(require_claude: bool = True) -> EagleEyeConfig:
     enable_langsmith_tracing()
     try:
-        return load_config()
+        return load_config(require_claude=require_claude)
     except ConfigError as e:
         display_error(str(e))
         raise typer.Exit(1)

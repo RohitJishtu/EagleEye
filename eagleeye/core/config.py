@@ -133,7 +133,7 @@ def get_proxy_token(client_id: str, client_secret: str, token_url: str, scope: s
     return _token_cache["token"]
 
 
-def load_config() -> EagleEyeConfig:
+def load_config(require_claude: bool = True) -> EagleEyeConfig:
     """Load configuration from env vars, falling back to ~/.eagleeye/config.toml."""
     auth_mode = os.environ.get("AUTH_MODE", "direct")
     github_token = os.environ.get("GITHUB_TOKEN")
@@ -162,7 +162,11 @@ def load_config() -> EagleEyeConfig:
     file_config = _load_yaml_config()
     github_token = github_token or file_config.get("github_token")
     anthropic_api_key = anthropic_api_key or file_config.get("anthropic_api_key", "")
-    proxy_client_id = proxy_client_id or file_config.get("proxy_client_id") or file_config.get("sn_client_id", "")
+    proxy_client_id = (
+        proxy_client_id
+        or file_config.get("proxy_client_id")
+        or file_config.get("sn_client_id", "")
+    )
     proxy_client_secret = (
         proxy_client_secret
         or file_config.get("proxy_client_secret")
@@ -211,7 +215,8 @@ def load_config() -> EagleEyeConfig:
         max_total_bytes=max_total_bytes,
         reference_repos=reference_repos,
     )
-    config.validate_for_claude()
+    if require_claude:
+        config.validate_for_claude()
     return config
 
 

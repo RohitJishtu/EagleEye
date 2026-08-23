@@ -11,7 +11,8 @@ Setup:
        Events: Pull requests
 
 Set GITHUB_WEBHOOK_SECRET to validate HMAC-SHA256 signatures.
-If unset, signature validation is skipped (dev mode only).
+Outside development the secret is required; set EAGLEEYE_DEV=1 to allow
+unsigned local testing.
 """
 
 from __future__ import annotations
@@ -32,13 +33,28 @@ logger = logging.getLogger(__name__)
 _webhook_secret: str = ""
 
 
+def _is_dev_mode() -> bool:
+    return os.environ.get("EAGLEEYE_DEV", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _require_webhook_secret() -> None:
+    if _webhook_secret or _is_dev_mode():
+        return
+    raise RuntimeError(
+        "GITHUB_WEBHOOK_SECRET is required outside development. "
+        "Set the secret or EAGLEEYE_DEV=1 for local unsigned testing."
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _webhook_secret
     _webhook_secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
+    _require_webhook_secret()
     if not _webhook_secret:
         logger.warning(
-            "GITHUB_WEBHOOK_SECRET is not set — webhook signature validation is disabled (dev mode)"
+            "GITHUB_WEBHOOK_SECRET is not set — "
+            "signature validation is disabled (EAGLEEYE_DEV)"
         )
     yield
 
@@ -53,7 +69,7 @@ app = FastAPI(
 def _verify_signature(payload_bytes: bytes, signature_header: str) -> bool:
     """Validate GitHub HMAC-SHA256 webhook signature (constant-time comparison)."""
     if not _webhook_secret:
-        return True
+        return _is_dev_mode()
     expected = "sha256=" + hmac.new(
         _webhook_secret.encode(), payload_bytes, hashlib.sha256
     ).hexdigest()
@@ -118,4 +134,7 @@ def run_server(host: str = "0.0.0.0", port: int = 8080, reload: bool = False) ->
     """Start the uvicorn ASGI server."""
     import uvicorn
 
+    global _webhook_secret
+    _webhook_secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
+    _require_webhook_secret()
     uvicorn.run("eagleeye.webhook.server:app", host=host, port=port, reload=reload)

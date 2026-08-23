@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import queue
 import re
 import threading
@@ -23,6 +24,39 @@ _state_lock = threading.Lock()
 _review_active = False
 _current_run: dict[str, Any] | None = None
 _runs: deque[dict[str, Any]] = deque(maxlen=100)
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _is_loopback_host(host: str) -> bool:
+    return host.strip().lower().strip("[]") in _LOOPBACK_HOSTS
+
+
+def _cockpit_token() -> str:
+    return os.environ.get("EAGLEEYE_COCKPIT_TOKEN", "").strip()
+
+
+def _validate_bind(host: str) -> None:
+    if not _is_loopback_host(host) and not _cockpit_token():
+        raise OSError(
+            "EAGLEEYE_COCKPIT_TOKEN is required when binding Cockpit beyond localhost"
+        )
+
+
+def _mutating_request_allowed(handler: BaseHTTPRequestHandler) -> tuple[bool, int, str]:
+    origin = handler.headers.get("Origin", "").strip()
+    if origin:
+        if origin == "null":
+            return False, HTTPStatus.FORBIDDEN, "cross-origin requests are not allowed"
+        origin_host = (urlparse(origin).hostname or "").lower()
+        if origin_host not in _LOOPBACK_HOSTS:
+            token = _cockpit_token()
+            provided = handler.headers.get("X-Cockpit-Token", "")
+            if not token or provided != token:
+                return False, HTTPStatus.FORBIDDEN, "cross-origin requests are not allowed"
+    token = _cockpit_token()
+    if token and handler.headers.get("X-Cockpit-Token", "") != token:
+        return False, HTTPStatus.UNAUTHORIZED, "invalid Cockpit token"
+    return True, HTTPStatus.OK, ""
 
 
 def emit_event(event: dict[str, Any]) -> None:
@@ -403,11 +437,30 @@ def _safe_artifact(path: str) -> Path | None:
     return None
 
 
+class CockpitHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        import sys
+
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError, ConnectionAbortedError)):
+            return
+        super().handle_error(request, client_address)
+
+
 class CockpitHandler(BaseHTTPRequestHandler):
     server_version = "EagleEyeCockpit/2"
 
     def log_message(self, format: str, *args: Any) -> None:
         return
+
+    def handle(self) -> None:
+        try:
+            super().handle()
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError, TimeoutError):
+            return
 
     def _json(self, status: int, payload: Any) -> None:
         body = json.dumps(payload).encode("utf-8")
@@ -435,7 +488,7 @@ class CockpitHandler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html"):
             from .presentation.html.dashboard import build_dashboard
 
-            self._file(build_dashboard())
+            self._file(build_dashboard(live=True))
             return
         if path == "/status":
             self._json(HTTPStatus.OK, get_status())
@@ -463,7 +516,7 @@ class CockpitHandler(BaseHTTPRequestHandler):
                     except queue.Empty:
                         self.wfile.write(b": keepalive\n\n")
                     self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
             finally:
                 with _state_lock:
@@ -479,6 +532,10 @@ class CockpitHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path not in ("/run", "/evaluate", "/feedback"):
             self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        allowed, status, error = _mutating_request_allowed(self)
+        if not allowed:
+            self._json(status, {"error": error})
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -586,9 +643,18 @@ class CockpitHandler(BaseHTTPRequestHandler):
         self._json(HTTPStatus.OK, {"status": "started", "run": run})
 
 
-def serve(host: str = "127.0.0.1", port: int = 8765) -> None:
-    """Serve Cockpit until interrupted."""
-    server = ThreadingHTTPServer((host, port), CockpitHandler)
+def serve(
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    open_browser: bool = False,
+) -> None:
+    """Serve Cockpit until interrupted. The socket is bound before the browser opens."""
+    _validate_bind(host)
+    server = CockpitHTTPServer((host, port), CockpitHandler)
+    if open_browser:
+        import webbrowser
+
+        webbrowser.open(f"http://{host}:{port}/")
     try:
         server.serve_forever()
     finally:

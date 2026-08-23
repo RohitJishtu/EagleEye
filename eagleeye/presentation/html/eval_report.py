@@ -76,6 +76,12 @@ _EVAL_EXTRA_CSS = """
     .plan-title { font-size: 15px; font-weight: 600; }
     .plan-block { margin-top: 8px; font-size: 13px; color: rgba(255,255,255,0.82); line-height: 1.5; }
     .plan-block .lbl { display: block; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 3px; }
+    .action-summary { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+    .action-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+    .action-note { font-size: 13px; color: rgba(255,255,255,0.78); line-height: 1.45; }
+    .action-copy { background: rgba(179,255,71,0.12); border: 1px solid var(--border); border-radius: 8px; color: var(--accent); cursor: pointer; font-weight: 700; padding: 7px 12px; }
+    .action-copy:hover { border-color: var(--accent); }
+    .action-pre { margin: 0; white-space: pre-wrap; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; line-height: 1.55; color: rgba(255,255,255,0.88); background: rgba(0,0,0,0.22); border-radius: 8px; padding: 12px 14px; }
 """
 
 
@@ -220,6 +226,34 @@ def _parse_remediation_plan(text: str) -> list[dict]:
     return steps
 
 
+def _action_summary_text(
+    repo: str,
+    branch: str,
+    date: str,
+    plan_steps: list[dict],
+    rec_items: list[str],
+) -> str:
+    lines = [
+        f"Implement the agreed EagleEye evaluation for {repo} ({branch}, {date}).",
+        "Only change the files named below. Keep existing behavior unless a step says otherwise.",
+        "",
+    ]
+    if plan_steps:
+        for step in plan_steps:
+            lines.append(f"{step['priority']}. [{step['severity']}] {step['title']}")
+            if step.get("files"):
+                lines.append(f"   Files: {step['files']}")
+            if step.get("change_plan"):
+                lines.append(f"   Change: {step['change_plan']}")
+            if step.get("acceptance_check"):
+                lines.append(f"   Done when: {step['acceptance_check']}")
+            lines.append("")
+    elif rec_items:
+        for index, item in enumerate(rec_items, 1):
+            lines.append(f"{index}. {item}")
+    return "\n".join(lines).strip()
+
+
 def _hit_row(finding: dict, delay: int = 0) -> str:
     sev = finding["severity"].lower()
     title = _fmt(finding["title"])
@@ -320,12 +354,19 @@ def _build_eval_html(fm: dict, risk: str, sections: dict, body_text: str) -> str
     <span>{len(modules)} modules</span>
   </div>"""
 
+    rec_text = sections.get("Recommendations", "")
+    rec_items = [line.strip()[2:] for line in rec_text.splitlines() if line.strip().startswith("- ")]
+    plan_steps = _parse_remediation_plan(sections.get("Remediation plan", ""))
+    action_text = _action_summary_text(repo, branch, date, plan_steps, rec_items)
+    n_actions = len(plan_steps) or len(rec_items)
+
     threat = f"""
   <div class="threat-strip">
     <a class="threat-tick crit" href="#hits-critical" style="animation-delay:40ms"><div class="n">{n_crit}</div><div class="l">Critical</div></a>
     <a class="threat-tick high" href="#hits-secrets" style="animation-delay:90ms"><div class="n">{n_high}</div><div class="l">High</div></a>
     <a class="threat-tick med" href="#hits-secrets" style="animation-delay:140ms"><div class="n">{n_med}</div><div class="l">Medium</div></a>
-    <a class="threat-tick ok" href="#do-this-week" style="animation-delay:190ms"><div class="n">{n_sec}</div><div class="l">Secrets/PII</div></a>
+    <a class="threat-tick ok" href="#hits-secrets" style="animation-delay:190ms"><div class="n">{n_sec}</div><div class="l">Secrets/PII</div></a>
+    <a class="threat-tick ok" href="#action-summary" style="animation-delay:240ms"><div class="n">{n_actions}</div><div class="l">Actions</div></a>
   </div>"""
 
     beats = ""
@@ -373,8 +414,6 @@ def _build_eval_html(fm: dict, risk: str, sections: dict, body_text: str) -> str
     <div class="hit-list">{hits}</div>
   </section>""")
 
-    rec_text = sections.get("Recommendations", "")
-    rec_items = [line.strip()[2:] for line in rec_text.splitlines() if line.strip().startswith("- ")]
     if rec_items:
         top = rec_items[:5]
         do_html = "".join(f'<div class="do-item"><div>{_fmt(item)}</div></div>' for item in top)
@@ -388,7 +427,6 @@ def _build_eval_html(fm: dict, risk: str, sections: dict, body_text: str) -> str
     <div class="card do-week">{do_html}{more}</div>
   </section>""")
 
-    plan_steps = _parse_remediation_plan(sections.get("Remediation plan", ""))
     if plan_steps:
         cards = []
         for step in plan_steps:
@@ -433,6 +471,19 @@ def _build_eval_html(fm: dict, risk: str, sections: dict, body_text: str) -> str
     <div class="card">{_fmt(cov)}</div>
   </section>""")
 
+    if action_text:
+        parts.append(f"""
+  <section id="action-summary">
+    <div class="section-title">Action summary</div>
+    <div class="action-summary">
+      <div class="action-toolbar">
+        <p class="action-note">Copy this pack if you agree with the analysis. Paste it into an agent or ticket to implement only these changes.</p>
+        <button class="action-copy" id="copy-action-summary" type="button">Copy action summary</button>
+      </div>
+      <pre class="action-pre" id="action-summary-text">{_html.escape(action_text)}</pre>
+    </div>
+  </section>""")
+
     footer = f"""
   <div class="footer">
     <span>Generated by EagleEye</span>
@@ -454,6 +505,27 @@ def _build_eval_html(fm: dict, risk: str, sections: dict, body_text: str) -> str
 {"".join(parts)}
 {footer}
 </div>
+<script>
+(function () {{
+  var btn = document.getElementById("copy-action-summary");
+  var text = document.getElementById("action-summary-text");
+  if (!btn || !text) return;
+  btn.addEventListener("click", function () {{
+    var payload = text.textContent || "";
+    var done = function () {{
+      btn.textContent = "Copied";
+      setTimeout(function () {{ btn.textContent = "Copy action summary"; }}, 1600);
+    }};
+    if (navigator.clipboard && navigator.clipboard.writeText) {{
+      navigator.clipboard.writeText(payload).then(done).catch(function () {{
+        window.getSelection().selectAllChildren(text);
+      }});
+    }} else {{
+      window.getSelection().selectAllChildren(text);
+    }}
+  }});
+}})();
+</script>
 </body>
 </html>"""
 

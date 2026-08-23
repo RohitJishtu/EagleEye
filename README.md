@@ -101,7 +101,11 @@ Cockpit records run latency, estimated token cost, failure rate, and optional
 false-positive feedback for pilot evaluation.
 
 Use `eagleeye cockpit --build-only --open` when you only want the static
-`reviews/index.html` dashboard.
+`reviews/index.html` dashboard. Live APIs are same-origin only. Binding
+beyond localhost requires `EAGLEEYE_COCKPIT_TOKEN`.
+
+Webhook mode (`eagleeye serve`) requires `GITHUB_WEBHOOK_SECRET` unless
+`EAGLEEYE_DEV=1`.
 
 ---
 

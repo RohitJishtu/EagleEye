@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import html
 import os
 import re
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote
 
 from ...core.paths import evaluations_root, reviews_root
 
@@ -33,6 +33,31 @@ _STATUS_STYLE = {
     "merged": ("color:#44cc88", "MERGED"),
     "closed": ("color:#ff8800", "CLOSED"),
 }
+
+
+def _esc(value: object) -> str:
+    return html.escape(str(value or ""), quote=True)
+
+
+def _live_artifact_href(kind: str, relative: str) -> str:
+    normalized = str(relative).replace("\\", "/")
+    if kind == "evaluation":
+        marker = "evaluations/"
+        if marker in normalized:
+            normalized = normalized.split(marker, 1)[1]
+        return "/artifacts/evaluations/" + normalized.lstrip("/")
+    return "/artifacts/reviews/" + normalized.lstrip("/")
+
+
+def _safe_href(value: str, *, live: bool = False, kind: str = "review") -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return "#"
+    if live:
+        raw = _live_artifact_href(kind, raw)
+    if raw.lower().startswith(("javascript:", "data:", "vbscript:")):
+        return "#"
+    return html.escape(raw, quote=True)
 
 
 def _parse_fm(text: str) -> dict:
@@ -256,13 +281,13 @@ def _group_evaluations(rows: list[dict]) -> list[dict]:
     return result
 
 
-def _eval_card(r: dict) -> str:
+def _eval_card(r: dict, live: bool = False) -> str:
     rm = _RISK_META.get(r["risk"], _RISK_META["UNKNOWN"])
-    repo_url = f"https://github.com/{r['repo']}"
+    repo_url = f"https://github.com/{_esc(r['repo'])}"
     ts = int(r["timestamp"])
-    grade = r.get("grade") or "—"
+    grade = _esc(r.get("grade") or "—")
     scope_tag = (
-        f'<span class="files-badge">📁 {r["scoped_path"]}</span>'
+        f'<span class="files-badge">📁 {_esc(r["scoped_path"])}</span>'
         if r.get("scoped_path") else ""
     )
     llm_tag = (
@@ -274,37 +299,44 @@ def _eval_card(r: dict) -> str:
     if len(history) > 1:
         prev_links = ""
         for run in history[1:]:
-            href = run["html"] if run.get("html") else run["md"]
-            prev_links += f'<a href="{href}" target="_blank" class="run-link">{run["date"] or "prev"} ↗</a>'
+            href = _safe_href(
+                run["html"] if run.get("html") else run["md"],
+                live=live,
+                kind="evaluation",
+            )
+            prev_links += (
+                f'<a href="{href}" target="_blank" class="run-link">'
+                f'{_esc(run["date"] or "prev")} ↗</a>'
+            )
         history_html = f'<div class="run-history"><span class="run-history-label">Prev runs:</span>{prev_links}</div>'
 
-    report_href = r["html"] if r.get("html") else r["md"]
-    rerun_repo = quote(str(r["repo"]), safe="")
-    rerun_branch = quote(str(r["branch"]), safe="")
-    rerun_path = quote(str(r.get("scoped_path", "")), safe="")
+    report_href = _safe_href(r["html"] if r.get("html") else r["md"], live=live, kind="evaluation")
+    if report_href:
+        report_href = f"{report_href}#action-summary"
 
     return f"""
-<div class="pr-card eval-card risk-{rm['cls']}" style="border-left-color:{rm['color']}" data-ts="{ts}" data-risk="{r['risk'].lower()}" data-type="evaluation">
+<div class="pr-card eval-card risk-{rm['cls']}" style="border-left-color:{rm['color']}" data-ts="{ts}" data-risk="{_esc(r['risk'].lower())}" data-type="evaluation">
   <div class="card-top">
     <div class="card-badges">
-      <span class="risk-badge" style="background:{rm['color']}22;color:{rm['color']};border-color:{rm['color']}55;font-size:11px;padding:4px 10px">{r['risk']}</span>
+      <span class="risk-badge" style="background:{rm['color']}22;color:{rm['color']};border-color:{rm['color']}55;font-size:11px;padding:4px 10px">{_esc(r['risk'])}</span>
       <span class="verdict-badge" style="background:rgba(179,255,71,0.08);color:var(--accent);border:1px solid var(--border)">Grade {grade}</span>
+      <span class="files-badge">Latest</span>
     </div>
-    <span class="time-ago" data-ts="{ts}" title="{r['date']}">…</span>
+    <span class="time-ago" data-ts="{ts}" title="{_esc(r['date'])}">…</span>
   </div>
-  <div class="card-title" style="font-size:15px;letter-spacing:-0.01em">{r['repo']}</div>
-  <div style="font-size:13px;color:rgba(232,244,255,0.78);line-height:1.4">{r['summary']}</div>
+  <div class="card-title" style="font-size:15px;letter-spacing:-0.01em">{_esc(r['repo'])}</div>
+  <div style="font-size:13px;color:rgba(232,244,255,0.78);line-height:1.4">{_esc(r['summary'])}</div>
   <div class="card-meta">
-    <a href="{repo_url}" target="_blank" class="repo-link">{r['repo']}</a>
-    <span class="files-badge">🌿 {r['branch']}</span>
+    <a href="{repo_url}" target="_blank" class="repo-link">{_esc(r['repo'])}</a>
+    <span class="files-badge">🌿 {_esc(r['branch'])}</span>
     {scope_tag}
     {llm_tag}
   </div>
   <div class="card-footer">
-    <span class="reviewed-at">🕐 {r['date']}</span>
-    <span>
-      <button class="open-btn" style="cursor:pointer" onclick="rerunEvaluation('{rerun_repo}','{rerun_branch}','{rerun_path}')">Re-run</button>
-      <a href="{report_href}" target="_blank" class="open-btn">Open Report ↗</a>
+    <span class="reviewed-at">🕐 {_esc(r['date'])}</span>
+    <span class="card-actions">
+      <button class="open-btn rerun-evaluation" style="cursor:pointer" type="button" data-repo="{_esc(r['repo'])}" data-branch="{_esc(r['branch'])}" data-path="{_esc(r.get('scoped_path', ''))}">Re-run</button>
+      <a href="{report_href}" target="_blank" class="open-btn">Open Report</a>
     </span>
   </div>
   {history_html}
@@ -321,24 +353,28 @@ def _stat_card(label: str, value: str, accent: str = "#b3ff47", stat_id: str = "
     )
 
 
-def _pr_card(r: dict) -> str:
+def _pr_card(r: dict, live: bool = False) -> str:
     vm = _VERDICT_META.get(r["verdict"], _VERDICT_META["unknown"])
     rm = _RISK_META.get(r["risk"], _RISK_META["UNKNOWN"])
-    repo_url    = f"https://github.com/{r['repo']}"
-    report_href = r["html"] if r["html"] else r["md"]
+    repo_url    = f"https://github.com/{_esc(r['repo'])}"
+    report_href = _safe_href(r["html"] if r["html"] else r["md"], live=live, kind="review")
     ts          = int(r["timestamp"])
-    by_tag      = f'<span class="by">@{r["by"]}</span>' if r["by"] else ""
-    files_tag   = f'<span class="files-badge">📂 {r["files_analyzed"]} files</span>' if r["files_analyzed"] else ""
+    by_tag      = f'<span class="by">@{_esc(r["by"])}</span>' if r["by"] else ""
+    files_tag = (
+        f'<span class="files-badge">📂 {_esc(r["files_analyzed"])} files</span>'
+        if r["files_analyzed"] else ""
+    )
+    pr_href = _esc(r["url"]) if str(r.get("url") or "").startswith(("http://", "https://")) else ""
     pr_link     = (
-        f'<a href="{r["url"]}" target="_blank" class="pr-num-link">#{r["pr"]}</a>'
-        if r["url"] else f'<span class="pr-num-link">#{r["pr"]}</span>'
+        f'<a href="{pr_href}" target="_blank" class="pr-num-link">#{_esc(r["pr"])}</a>'
+        if pr_href else f'<span class="pr-num-link">#{_esc(r["pr"])}</span>'
     )
 
     # PR status badge
     status_tag = ""
     if r["pr_status"]:
         style, label = _STATUS_STYLE.get(r["pr_status"].lower(), ("color:var(--muted)", r["pr_status"].upper()))
-        status_tag = f'<span class="status-badge" style="{style}">{label}</span>'
+        status_tag = f'<span class="status-badge" style="{style}">{_esc(label)}</span>'
 
     # Cost tag
     cost_tag = ""
@@ -351,40 +387,40 @@ def _pr_card(r: dict) -> str:
     if len(history) > 1:
         prev_links = ""
         for run in history[1:]:  # skip history[0] (= latest)
-            href = run["html"] if run["html"] else run["md"]
-            label = run["date"] or "prev"
+            href = _safe_href(run["html"] if run["html"] else run["md"], live=live, kind="review")
+            label = _esc(run["date"] or "prev")
             prev_links += f'<a href="{href}" target="_blank" class="run-link" title="{label}">{label} ↗</a>'
         history_html = f'<div class="run-history"><span class="run-history-label">Prev runs:</span>{prev_links}</div>'
 
     return f"""
-<div class="pr-card risk-{rm['cls']}" style="border-left-color:{rm['color']}" data-ts="{ts}" data-status="{r['pr_status']}" data-verdict="{r['verdict']}" data-risk="{r['risk'].lower()}" data-cost="{r['cost_usd']}">
+<div class="pr-card risk-{rm['cls']}" style="border-left-color:{rm['color']}" data-ts="{ts}" data-status="{_esc(r['pr_status'])}" data-verdict="{_esc(r['verdict'])}" data-risk="{_esc(r['risk'].lower())}" data-cost="{r['cost_usd']}">
   <div class="card-top">
     <div class="card-badges">
       <span class="verdict-badge v-{vm['cls']}">{vm['emoji']} {vm['label']}</span>
-      <span class="risk-badge" style="background:{rm['color']}20;color:{rm['color']};border-color:{rm['color']}40">{r['risk']} RISK</span>
+      <span class="risk-badge" style="background:{rm['color']}20;color:{rm['color']};border-color:{rm['color']}40">{_esc(r['risk'])} RISK</span>
       {status_tag}
     </div>
-    <span class="time-ago" data-ts="{ts}" title="{r['date']}">…</span>
+    <span class="time-ago" data-ts="{ts}" title="{_esc(r['date'])}">…</span>
   </div>
-  <div class="card-title">{pr_link} · {r['title']}</div>
+  <div class="card-title">{pr_link} · {_esc(r['title'])}</div>
   <div class="card-meta">
-    <a href="{repo_url}" target="_blank" class="repo-link">{r['repo']}</a>
+    <a href="{repo_url}" target="_blank" class="repo-link">{_esc(r['repo'])}</a>
     {by_tag}
     {files_tag}
     {cost_tag}
   </div>
   <div class="card-footer">
-    <span class="reviewed-at">🕐 {r['date']}</span>
-    <span>
-      <button class="open-btn" style="cursor:pointer" onclick="rerunReview('{r['owner']}','{r['repo_name']}',{r['pr_number']})">Re-run</button>
-      <a href="{report_href}" target="_blank" class="open-btn">Open Report ↗</a>
+    <span class="reviewed-at">🕐 {_esc(r['date'])}</span>
+    <span class="card-actions">
+      <button class="open-btn rerun-review" style="cursor:pointer" type="button" data-owner="{_esc(r['owner'])}" data-repo="{_esc(r['repo_name'])}" data-pr="{int(r['pr_number'])}">Re-run</button>
+      <a href="{report_href}" target="_blank" class="open-btn">Open Report</a>
     </span>
   </div>
   {history_html}
 </div>"""
 
 
-def build_dashboard() -> Path:
+def build_dashboard(live: bool = False) -> Path:
     rows = _scan_reviews()
     grouped = _group_reviews(rows)
     eval_rows = _scan_evaluations()
@@ -416,11 +452,11 @@ def build_dashboard() -> Path:
         _stat_card("Repos Assessed",    str(eval_total), "#44cc88", "estat-repos"),
     ])
 
-    cards_html = "".join(_pr_card(r) for r in grouped)
+    cards_html = "".join(_pr_card(r, live=live) for r in grouped)
     if not cards_html:
         cards_html = '<div class="empty">No PR reviews found — run <code>eagleeye review owner/repo 42</code>.</div>'
 
-    eval_cards_html = "".join(_eval_card(r) for r in eval_grouped)
+    eval_cards_html = "".join(_eval_card(r, live=live) for r in eval_grouped)
     if not eval_cards_html:
         eval_cards_html = '<div class="empty">No evaluations found — run <code>eagleeye evaluate owner/repo</code>.</div>'
 
@@ -492,9 +528,10 @@ def build_dashboard() -> Path:
   .by {{ background: rgba(179,255,71,0.08); border: 1px solid var(--border); border-radius: 20px; padding: 1px 8px; font-size: 10.5px; color: var(--accent); }}
   .files-badge {{ background: rgba(90,138,170,0.12); border: 1px solid rgba(90,138,170,0.25); border-radius: 20px; padding: 1px 8px; font-size: 10.5px; color: var(--muted); }}
   .cost-badge {{ background: rgba(179,255,71,0.06); border: 1px solid var(--border); border-radius: 20px; padding: 1px 8px; font-size: 10.5px; color: var(--muted); }}
-  .card-footer {{ display: flex; align-items: center; justify-content: space-between; margin-top: 4px; border-top: 1px solid var(--border); padding-top: 10px; }}
-  .reviewed-at {{ font-size: 11px; color: var(--muted); }}
-  .open-btn {{ background: rgba(179,255,71,0.1); border: 1px solid var(--border); border-radius: 8px; padding: 5px 12px; font-size: 12px; color: var(--accent); text-decoration: none; font-weight: 600; transition: all 0.15s; }}
+  .card-footer {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 4px; border-top: 1px solid var(--border); padding-top: 10px; flex-wrap: nowrap; }}
+  .reviewed-at {{ font-size: 11px; color: var(--muted); flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  .card-actions {{ display: flex; align-items: center; gap: 6px; flex: 0 0 auto; flex-wrap: nowrap; }}
+  .open-btn {{ display: inline-flex; align-items: center; background: rgba(179,255,71,0.1); border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px; font-size: 12px; color: var(--accent); text-decoration: none; font-weight: 600; transition: all 0.15s; white-space: nowrap; flex: 0 0 auto; }}
   .open-btn:hover {{ background: rgba(179,255,71,0.2); border-color: var(--accent); }}
   .empty {{ grid-column: 1/-1; text-align: center; padding: 60px; color: var(--muted); font-size: 15px; }}
   .run-history {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }}
@@ -515,6 +552,8 @@ def build_dashboard() -> Path:
   .run-panel input:focus {{ border-color: var(--accent); }}
   .run-panel button {{ background: var(--accent); border: 0; border-radius: 8px; color: var(--bg); cursor: pointer; font-weight: 700; padding: 9px 15px; }}
   .run-panel button:disabled {{ cursor: wait; opacity: 0.5; }}
+  .run-panel .refresh-btn {{ background: transparent; border: 1px solid var(--border); color: var(--accent); }}
+  .run-panel .refresh-btn:hover {{ background: rgba(179,255,71,0.12); }}
   .run-controls {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; }}
   .run-options {{ display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 11px; }}
   .run-options input {{ min-width: auto; }}
@@ -564,6 +603,7 @@ def build_dashboard() -> Path:
       <label><input id="eval-data" type="checkbox" /> Include data dirs</label>
     </span>
     <button id="evaluate-button" type="submit">Evaluate</button>
+    <button id="refresh-button" class="refresh-btn" type="button" onclick="refreshForms()">Refresh</button>
   </form>
   <button id="feedback-button" type="button" style="display:none" onclick="recordFeedback()">Record feedback</button>
   <span class="run-state" id="run-state">Live status is available when opened with <code>eagleeye cockpit</code>.</span>
@@ -626,6 +666,20 @@ var _runButton = document.getElementById('run-button');
 var _evaluateButton = document.getElementById('evaluate-button');
 var _feedbackButton = document.getElementById('feedback-button');
 var _currentRun = null;
+var _isLive = location.protocol === 'http:' || location.protocol === 'https:';
+function apiUrl(path) {{
+  return path;
+}}
+function liveError(error) {{
+  if (!_isLive) {{
+    return 'Open Cockpit at http://127.0.0.1:8765 with `eagleeye cockpit --open`. This saved HTML file cannot call the live APIs.';
+  }}
+  var message = (error && error.message) || '';
+  if (/Failed to fetch|NetworkError|Load failed/i.test(message)) {{
+    return 'Could not reach the Cockpit server. Keep `eagleeye cockpit` running and reload this page.';
+  }}
+  return message || 'Request failed';
+}}
 function showRun(run) {{
   _currentRun = run;
   if (!run) {{
@@ -649,7 +703,7 @@ function showRun(run) {{
       link.href = artifactUrl;
       link.target = '_blank';
       link.className = 'open-btn';
-      link.textContent = 'Open report ↗';
+      link.textContent = 'Open report';
       _runState.appendChild(document.createTextNode(' '));
       _runState.appendChild(link);
     }}
@@ -663,7 +717,7 @@ function showRun(run) {{
 function startReview(event) {{
   event.preventDefault();
   _runButton.disabled = true;
-  fetch('/run', {{
+  fetch(apiUrl('/run'), {{
     method: 'POST',
     headers: {{'Content-Type': 'application/json'}},
     body: JSON.stringify({{
@@ -677,7 +731,7 @@ function startReview(event) {{
       showRun(body.run);
     }});
   }}).catch(function(error) {{
-    _runState.textContent = error.message;
+    _runState.textContent = liveError(error);
     _runState.dataset.status = 'failed';
     _runButton.disabled = false;
   }});
@@ -685,7 +739,7 @@ function startReview(event) {{
 function startEvaluation(event) {{
   event.preventDefault();
   _evaluateButton.disabled = true;
-  fetch('/evaluate', {{
+  fetch(apiUrl('/evaluate'), {{
     method: 'POST',
     headers: {{'Content-Type': 'application/json'}},
     body: JSON.stringify({{
@@ -703,10 +757,23 @@ function startEvaluation(event) {{
       showRun(body.run);
     }});
   }}).catch(function(error) {{
-    _runState.textContent = error.message;
+    _runState.textContent = liveError(error);
     _runState.dataset.status = 'failed';
     _evaluateButton.disabled = false;
   }});
+}}
+function refreshForms() {{
+  document.getElementById('run-form').reset();
+  document.getElementById('evaluate-form').reset();
+  var search = document.querySelector('.search-input');
+  if (search) {{
+    search.value = '';
+    doSearch('');
+  }}
+  _feedbackButton.textContent = 'Record feedback';
+  _feedbackButton.disabled = false;
+  var busy = _currentRun && (_currentRun.status === 'queued' || _currentRun.status === 'running');
+  if (!busy) showRun(null);
 }}
 function rerunReview(owner, repo, prNumber) {{
   document.getElementById('run-owner').value = owner;
@@ -716,10 +783,7 @@ function rerunReview(owner, repo, prNumber) {{
   window.scrollTo({{top: 0, behavior: 'smooth'}});
 }}
 function rerunEvaluation(repoSlug, branch, scopedPath) {{
-  repoSlug = decodeURIComponent(repoSlug);
-  branch = decodeURIComponent(branch);
-  scopedPath = decodeURIComponent(scopedPath);
-  var parts = repoSlug.split('/');
+  var parts = (repoSlug || '').split('/');
   document.getElementById('eval-owner').value = parts.shift() || '';
   document.getElementById('eval-repo').value = parts.join('/');
   document.getElementById('eval-branch').value = branch || '';
@@ -728,7 +792,7 @@ function rerunEvaluation(repoSlug, branch, scopedPath) {{
   window.scrollTo({{top: 0, behavior: 'smooth'}});
 }}
 function refreshMetrics() {{
-  fetch('/metrics').then(function(response) {{ return response.json(); }}).then(function(metrics) {{
+  fetch(apiUrl('/metrics')).then(function(response) {{ return response.json(); }}).then(function(metrics) {{
     document.getElementById('pilot-metrics').textContent =
       metrics.runs + ' pilot runs · ' +
       Math.round(metrics.failure_rate * 100) + '% failures · ' +
@@ -742,7 +806,7 @@ function recordFeedback() {{
   var count = window.prompt('How many findings were false positives?', '0');
   if (count === null) return;
   var notes = window.prompt('Optional feedback notes', '') || '';
-  fetch('/feedback', {{
+  fetch(apiUrl('/feedback'), {{
     method: 'POST',
     headers: {{'Content-Type': 'application/json'}},
     body: JSON.stringify({{run_id: _currentRun.id, false_positives: parseInt(count), notes: notes}})
@@ -753,14 +817,14 @@ function recordFeedback() {{
     refreshMetrics();
   }}).catch(function() {{ _runState.textContent = 'Could not record feedback.'; }});
 }}
-fetch('/status').then(function(response) {{
+fetch(apiUrl('/status')).then(function(response) {{
   if (response.ok) return response.json();
   throw new Error();
 }}).then(function(body) {{ showRun(body.current); }}).catch(function() {{
-  _runState.textContent = 'Static Cockpit — run `eagleeye cockpit` for live reviews.';
+  _runState.textContent = 'Static Cockpit — run `eagleeye cockpit --open` and use http://127.0.0.1:8765.';
 }});
-if (window.EventSource) {{
-  var events = new EventSource('/events');
+if (_isLive && window.EventSource) {{
+  var events = new EventSource(apiUrl('/events'));
   events.onmessage = function(message) {{
     var event = JSON.parse(message.data);
     if (event.type === 'run_status') {{
@@ -770,7 +834,18 @@ if (window.EventSource) {{
     }}
   }};
 }}
-refreshMetrics();
+if (_isLive) refreshMetrics();
+document.addEventListener('click', function(event) {{
+  var reviewBtn = event.target.closest('.rerun-review');
+  if (reviewBtn) {{
+    rerunReview(reviewBtn.dataset.owner, reviewBtn.dataset.repo, parseInt(reviewBtn.dataset.pr, 10));
+    return;
+  }}
+  var evalBtn = event.target.closest('.rerun-evaluation');
+  if (evalBtn) {{
+    rerunEvaluation(evalBtn.dataset.repo, evalBtn.dataset.branch || '', evalBtn.dataset.path || '');
+  }}
+}});
 
 function switchTab(name, btn) {{
   document.querySelectorAll('.tab-btn').forEach(function(b) {{ b.classList.remove('active'); }});

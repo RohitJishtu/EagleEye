@@ -365,11 +365,19 @@ def serve(
         display_error("fastapi and uvicorn are required. Run: pip install 'eagleeye[webhook]'")
         raise typer.Exit(1)
 
+    import os
+
     if secret:
-        import os
         os.environ["GITHUB_WEBHOOK_SECRET"] = secret
 
     _load_or_exit()  # validate config before starting
+    from ..webhook.server import _is_dev_mode
+
+    if not (secret or os.environ.get("GITHUB_WEBHOOK_SECRET") or _is_dev_mode()):
+        display_error(
+            "GITHUB_WEBHOOK_SECRET is required. Pass --secret or set EAGLEEYE_DEV=1 for local testing."
+        )
+        raise typer.Exit(1)
     display_info(f"Starting EagleEye webhook server on {host}:{port}…")
     display_info("Listening for pull_request.opened / synchronize / reopened events.")
 

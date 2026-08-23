@@ -47,3 +47,9 @@ def test_eval_report_generates_html(tmp_path):
     assert "Remediation plan" in html
     assert "Change the code" in html
     assert "Acceptance check" in html
+    assert 'id="action-summary"' in html
+    assert "Implement the agreed EagleEye evaluation" in html
+    assert "Copy action summary" in html
+    assert 'href="#hits-secrets"' in html
+    assert 'href="#action-summary"' in html
+    assert html.find("Remediation plan") < html.find('id="action-summary"')

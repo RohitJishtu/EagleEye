@@ -117,6 +117,42 @@ def test_reviews_endpoint_returns_json(monkeypatch):
     conn.close()
 
 
+def test_json_does_not_send_wildcard_cors():
+    _start_server(17896)
+    conn = http.client.HTTPConnection("localhost", 17896, timeout=3)
+    conn.request("GET", "/status")
+    resp = conn.getresponse()
+    assert resp.status == 200
+    assert resp.getheader("Access-Control-Allow-Origin") is None
+    conn.close()
+
+
+def test_cross_origin_run_is_rejected():
+    _start_server(17897)
+    conn = http.client.HTTPConnection("localhost", 17897, timeout=3)
+    body = json.dumps({"owner": "o", "repo": "r", "pr_number": 1}).encode()
+    conn.request(
+        "POST",
+        "/run",
+        body=body,
+        headers={"Content-Type": "application/json", "Origin": "https://evil.example"},
+    )
+    resp = conn.getresponse()
+    assert resp.status == 403
+    conn.close()
+
+
+def test_validate_bind_requires_token_off_loopback():
+    import eagleeye.cockpit_server as cs
+
+    try:
+        cs._validate_bind("0.0.0.0")
+        raise AssertionError("expected OSError")
+    except OSError as exc:
+        assert "EAGLEEYE_COCKPIT_TOKEN" in str(exc)
+    cs._validate_bind("127.0.0.1")
+
+
 def test_feedback_endpoint_records_false_positives(monkeypatch, tmp_path):
     import eagleeye.cockpit_server as cs
 

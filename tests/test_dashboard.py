@@ -81,8 +81,35 @@ def test_build_dashboard_includes_evaluations_tab(cockpit_dirs):
     assert "Repo Evaluations" in html
     assert "eval-card" in html
     assert "acme/widget" in html
-    assert "../evaluations/acme-widget/eval-test-1700000000.html" in html
+    assert "Latest" in html
+    assert "../evaluations/acme-widget/eval-test-1700000000.html#action-summary" in html
     assert 'id="run-form"' in html
     assert 'id="evaluate-form"' in html
-    assert "fetch('/evaluate'" in html
-    assert "new EventSource('/events')" in html
+    assert 'id="refresh-button"' in html
+    assert "function refreshForms()" in html
+    assert "fetch(apiUrl('/evaluate')" in html
+    assert "EventSource(apiUrl('/events'))" in html
+
+
+def test_build_dashboard_live_uses_artifact_urls(cockpit_dirs):
+    reviews, evaluations = cockpit_dirs
+    md = _write_eval(evaluations, "acme/widget")
+    md.with_suffix(".html").write_text("<html></html>")
+    repo_dir = reviews / "acme-widget"
+    repo_dir.mkdir()
+    (repo_dir / "pr-9-demo.md").write_text(
+        "---\nrepo: acme/widget\npr: 9\ntitle: <script>alert(1)</script>\n"
+        "date: 2026-07-10\ntimestamp_utc: 1700000000\nurl: javascript:alert(1)\n---\n"
+        "## EagleEye Code Review ✅\n"
+    )
+    (repo_dir / "pr-9-demo.html").write_text("<html></html>")
+
+    html = dash.build_dashboard(live=True).read_text(encoding="utf-8")
+    assert "/artifacts/evaluations/acme-widget/eval-test-1700000000.html#action-summary" in html
+    assert "/artifacts/reviews/acme-widget/pr-9-demo.html" in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert 'href="javascript:alert(1)"' not in html
+    assert "onclick=\"rerunReview(" not in html
+    assert 'class="open-btn rerun-review"' in html
+    assert 'class="card-actions"' in html
+    assert ".card-actions" in html

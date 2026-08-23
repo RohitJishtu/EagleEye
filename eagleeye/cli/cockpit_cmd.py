@@ -17,7 +17,7 @@ def cockpit(
 ) -> None:
     """Launch the EagleEye Command Center and its live review APIs."""
     from ..presentation.html.dashboard import build_dashboard
-    from ..presentation.terminal import display_info, display_success
+    from ..presentation.terminal import display_error, display_info, display_success
 
     out = build_dashboard()
     display_success(f"Cockpit built → {out}")
@@ -29,14 +29,13 @@ def cockpit(
         return
 
     url = f"http://{host}:{port}"
-    if open_browser:
-        import webbrowser
-
-        webbrowser.open(url)
     display_info(f"Cockpit live → {url} (press Ctrl+C to stop)")
     from ..cockpit_server import serve
 
     try:
-        serve(host=host, port=port)
+        serve(host=host, port=port, open_browser=open_browser)
+    except OSError as exc:
+        display_error(f"Could not bind {url}: {exc}")
+        raise typer.Exit(1) from exc
     except KeyboardInterrupt:
         display_info("Cockpit stopped.")

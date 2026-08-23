@@ -13,6 +13,11 @@ from fastapi.testclient import TestClient
 from eagleeye.webhook.server import _verify_signature, app
 
 
+@pytest.fixture(autouse=True)
+def _dev_webhooks(monkeypatch):
+    monkeypatch.setenv("EAGLEEYE_DEV", "1")
+
+
 @pytest.fixture
 def client():
     return TestClient(app, raise_server_exceptions=False)
@@ -54,6 +59,23 @@ def test_verify_signature_no_secret_allows_all():
     ws._webhook_secret = ""
     assert _verify_signature(b"anything", "") is True
     assert _verify_signature(b"anything", "sha256=bogus") is True
+
+
+def test_verify_signature_no_secret_rejected_outside_dev(monkeypatch):
+    import eagleeye.webhook.server as ws
+
+    monkeypatch.delenv("EAGLEEYE_DEV", raising=False)
+    ws._webhook_secret = ""
+    assert _verify_signature(b"anything", "") is False
+
+
+def test_require_webhook_secret_outside_dev(monkeypatch):
+    import eagleeye.webhook.server as ws
+
+    monkeypatch.delenv("EAGLEEYE_DEV", raising=False)
+    ws._webhook_secret = ""
+    with pytest.raises(RuntimeError, match="GITHUB_WEBHOOK_SECRET"):
+        ws._require_webhook_secret()
 
 
 # ---------------------------------------------------------------------------

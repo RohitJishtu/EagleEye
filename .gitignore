@@ -8,6 +8,7 @@ plan/
 CLAUDE.md
 *.md
 !README.md
+!study-materials/**/*.md
 
 # Local docs, scripts, and generated output (not product source)
 docs/
